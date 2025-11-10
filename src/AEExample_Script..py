@@ -28,6 +28,7 @@ email: debora@cvc.uab.es, pcano@cvc.uab.es
 Reference: https://arxiv.org/abs/2309.16053 
 
 """
+
 # IO Libraries
 import sys
 import os
@@ -41,16 +42,64 @@ import glob
 from PIL import Image
 
 # Torch Libraries
-#from torch.utils.data import DataLoader
-#import gc
-#import torch
+from torch.utils.data import DataLoader
+import gc
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+
+  # your provided dataset wrapper
+from PIL import Image
+from sklearn.model_selection import GroupShuffleSplit
+from sklearn.utils import shuffle as sk_shuffle
+from datetime import datetime
+from pathlib import Path
+import json
 
 
 ## Own Functions
-#from Models.AEmodels import AutoEncoderCNN
+from Models.AEmodels import AutoEncoderCNN
+from Models.datasets import Standard_Dataset
 
 from config import CROPPED_PATCHES_DIR, ANNOTATED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE, ANNOTATED_METADATA_FILE
 
+
+def AEConfigs(Config):
+    net_paramsEnc={}
+    net_paramsDec={}
+    inputmodule_paramsDec={}
+    if Config=='1':
+        # CONFIG1
+        net_paramsEnc['block_configs']=[[32,32],[64,64]]
+        net_paramsEnc['stride']=[[1,2],[1,2]]
+        net_paramsDec['block_configs']=[[64,32],[32,inputmodule_paramsEnc['num_input_channels']]]
+        net_paramsDec['stride']=net_paramsEnc['stride']
+        inputmodule_paramsDec['num_input_channels']=net_paramsEnc['block_configs'][-1][-1]
+     
+
+        
+    elif Config=='2':
+        # CONFIG 2
+        net_paramsEnc['block_configs']=[[32],[64],[128],[256]]
+        net_paramsEnc['stride']=[[2],[2],[2],[2]]
+        net_paramsDec['block_configs']=[[128],[64],[32],[inputmodule_paramsEnc['num_input_channels']]]
+        net_paramsDec['stride']=net_paramsEnc['stride']
+        inputmodule_paramsDec['num_input_channels']=net_paramsEnc['block_configs'][-1][-1]
+   
+        
+    elif Config=='3':  
+        # CONFIG3
+        net_paramsEnc['block_configs']=[[32],[64],[64]]
+        net_paramsEnc['stride']=[[1],[2],[2]]
+        net_paramsDec['block_configs']=[[64],[32],[inputmodule_paramsEnc['num_input_channels']]]
+        net_paramsDec['stride']=net_paramsEnc['stride']
+        inputmodule_paramsDec['num_input_channels']=net_paramsEnc['block_configs'][-1][-1]
+    
+    return net_paramsEnc,net_paramsDec,inputmodule_paramsDec
+
+
+######################### 0. EXPERIMENT PARAMETERS
 def _read_metadata_excel(excel_path):
     """
     Read an excel metadata file and return a DataFrame.
@@ -250,37 +299,84 @@ def get_all_subfolders(root_dir):
     return subfolders
 
 
-
 crossval_cropped_folders = get_all_subfolders(CROPPED_PATCHES_DIR)
 annotated_folders = get_all_subfolders(ANNOTATED_PATCHES_DIR)
+
 
 print(f"Found {len(crossval_cropped_folders)} cropped folders and {len(annotated_folders)} annotated folders.")
 
 
-I_annot, meta_annot = LoadAnnotated(annotated_folders, n_images_per_folder=5, excelFile=ANNOTATED_METADATA_FILE, verbose=True)
-print("Annotated loaded:", I_annot.shape, meta_annot.shape)
+Ims_annot, meta_annot = LoadAnnotated(annotated_folders, n_images_per_folder=5, excelFile=ANNOTATED_METADATA_FILE, verbose=True)
+print("Annotated loaded:", Ims_annot.shape, meta_annot.shape)
 print(meta_annot.head())
 
-# Load some cropped (non-annotated) patches for AE training (healthy)
-I_cropped, meta_cropped = LoadCropped(crossval_cropped_folders, n_images_per_folder=5, excelFile=None, verbose=True)
-print("Cropped loaded:", I_cropped.shape, meta_cropped.shape)
+# non-annotated healthy patches for AE training 
+Ims_cropped, meta_cropped = LoadCropped(crossval_cropped_folders, n_images_per_folder=5, excelFile=None, verbose=True) 
+print("Cropped loaded:", Ims_cropped.shape, meta_cropped.shape)
 print(meta_cropped.head())
 
-#### 1. LOAD DATA: Implement 
+# 0.1 AE PARAMETERS
+inputmodule_paramsEnc={}
+inputmodule_paramsEnc['num_input_channels']=3
+
+# 0.1 NETWORK TRAINING PARAMS
+AE_params = {
+    'epochs': 25,
+    'batch_size': 64,
+    'lr': 1e-3,
+    'weight_decay': 1e-5,
+    'img_size': (128,128),   
+    'device': 'cuda' if torch.cuda.is_available() else 'cpu',
+}
+
+# 0.2 FOLDERS
+
+#### 1. LOAD DATA: Implement
+
 # 1.1 Patient Diagnosis
+df_diag = pd.read_csv(PATIENT_DIAGNOSIS_FILE) if os.path.isfile(PATIENT_DIAGNOSIS_FILE) else None
+
 
 # 1.2 Patches Data
+ae_train_ims, ae_train_meta = LoadCropped(
+    CROPPED_PATCHES_DIR, n_per_folder=None, diagnosis_csv=PATIENT_DIAGNOSIS_FILE,
+    only_negative=True, to_size=AE_params['img_size']
+)
+
+# Annotated para aprender umbral de error (ROC)
+ann_ims, ann_meta = LoadAnnotated(
+    ANNOTATED_PATCHES_DIR, n_per_folder=None, excel_file=ANNOTATED_METADATA_FILE,
+    drop_uncertain=True, to_size=AE_params['img_size']
+)
 
 
 #### 2. DATA SPLITING INTO INDEPENDENT SETS
 
 # 2.0 Annotated set for FRed optimal threshold
-
+# later 
 # 2.1 AE trainnig set
 
 # 2.1 Diagosis crossvalidation set
+cvset_ims, cvset_meta = LoadCropped(
+    CROPPED_PATCHES_DIR, n_per_folder=None, diagnosis_csv=PATIENT_DIAGNOSIS_FILE,
+    only_negative=False, to_size=AE_params['img_size']
+)
 
 #### 3. lOAD PATCHES
+
+def _to_dataset(ims, meta, with_labels=False):
+    X = np.stack([im.transpose(2,0,1) for im in ims], axis=0) / 255.0  
+    if with_labels:
+        y = np.array([m['presenceHelico'] for m in meta], dtype=np.int64)
+        return Standard_Dataset(X, y)
+    else:
+        return Standard_Dataset(X)
+
+ae_train_ds = _to_dataset(ae_train_ims, ae_train_meta, with_labels=False)
+ann_ds = _to_dataset(ann_ims, ann_meta, with_labels=True)
+
+ae_train_loader = DataLoader(ae_train_ds, batch_size=AE_params['batch_size'], shuffle=True, num_workers=2)
+ann_loader = DataLoader(ann_ds, batch_size=AE_params['batch_size'], shuffle=False, num_workers=2)
 
 ### 4. AE TRAINING
 
@@ -290,19 +386,43 @@ print(meta_cropped.head())
 # CASES.
 
 # 4.1 Data Split
+patients_cv = np.array([m['CODI'] for m in cvset_meta])
+gss = GroupShuffleSplit(n_splits=10, test_size=0.2, random_state=42)
+cv_folds = list(gss.split(np.arange(len(cvset_ims)), groups=patients_cv))
 
 
-# ###### CONFIG1
-# Config='1'
-# net_paramsEnc,net_paramsDec,inputmodule_paramsDec=AEConfigs(Config)
-# model=AutoEncoderCNN(inputmodule_paramsEnc, net_paramsEnc,
-#                      inputmodule_paramsDec, net_paramsDec)
-# # 4.2 Model Training
+###### CONFIG1
+Config='1'
+net_paramsEnc,net_paramsDec,inputmodule_paramsDec=AEConfigs(Config)
+model=AutoEncoderCNN(inputmodule_paramsEnc, net_paramsEnc,
+                     inputmodule_paramsDec, net_paramsDec)
+# 4.2 Model Training
+optimizer = optim.Adam(model.parameters(), lr=AE_params['lr'], weight_decay=AE_params['weight_decay'])
+criterion = nn.MSELoss()
 
-# # Free GPU Memory After Training
-# gc.collect()
-# torch.cuda.empty_cache()
-# #### 5. AE RED METRICS THRESHOLD LEARNING
+model.train()
+for epoch in range(AE_params['epochs']):
+    epoch_loss = 0.0
+    for batch in ae_train_loader:
+        x = batch[0].to(AE_params['device'])  # Standard_Dataset devuelve (X,) para unlabeled
+        optimizer.zero_grad()
+        recon = model(x)
+        loss = criterion(recon, x)
+        loss.backward()
+        optimizer.step()
+        epoch_loss += loss.item() * x.size(0)
+    epoch_loss /= len(ae_train_ds)
+    print(f"[AE][Epoch {epoch+1}/{AE_params['epochs']}] loss={epoch_loss:.5f}")
+
+
+Path('checkpoints').mkdir(exist_ok=True)
+torch.save(model.state_dict(), 'checkpoints/AE_System1.pth') # save model 
+
+# Free GPU Memory Aft er Training
+gc.collect()
+torch.cuda.empty_cache()
+
+#### 5. AE RED METRICS THRESHOLD LEARNING
 
 # ## 5.1 AE Model Evaluation
 
