@@ -41,13 +41,17 @@ import glob
 from PIL import Image
 
 # Torch Libraries
-#from torch.utils.data import DataLoader
-#import gc
-#import torch
+from torch.utils.data import DataLoader
+import gc
+import torch
+import torch.nn as nn
+import torch.optim as optim
 
 
-## Own Functions
-#from Models.AEmodels import AutoEncoderCNN
+# Own Functions
+from Models.AEmodels import AutoEncoderCNN
+from Models.datasets import Standard_Dataset
+
 
 from config import CROPPED_PATCHES_DIR, ANNOTATED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE, ANNOTATED_METADATA_FILE
 
@@ -335,7 +339,7 @@ AE_params = {
     'lr': 1e-3,
     'weight_decay': 1e-5,
     'img_size': (128,128),   
-#    'device': 'cuda' if torch.cuda.is_available() else 'cpu',
+    'device': 'cuda' if torch.cuda.is_available() else 'cpu',
 }
 
 
@@ -350,85 +354,60 @@ crossval_cropped_folders = get_all_subfolders(CROPPED_PATCHES_DIR)
 annotated_folders = get_all_subfolders(ANNOTATED_PATCHES_DIR)
 
 ae_train_ims, ae_train_meta = LoadCropped(
-    crossval_cropped_folders, n_images_per_folder=5, 
+    crossval_cropped_folders, n_images_per_folder=1, 
     excelFile=PATIENT_DIAGNOSIS_FILE, resize=AE_params['img_size']
 )
 print("Cropped loaded:", ae_train_ims.shape, ae_train_meta.shape)
 print(ae_train_meta.head())
 
 
-ann_ims, ann_meta = LoadAnnotated(
-    annotated_folders, n_images_per_folder=None, 
-    excelFile=ANNOTATED_METADATA_FILE, resize=AE_params['img_size']
-)
-print("Annotated loaded:", ann_ims.shape, ann_meta.shape)
-print(ann_meta.head())
-
-
-print(f"Found {len(crossval_cropped_folders)} cropped folders and {len(annotated_folders)} annotated folders.")
-
-
-# I_annot, meta_annot = LoadAnnotated(annotated_folders, n_images_per_folder=5, excelFile=ANNOTATED_METADATA_FILE, resize=AE_params['img_size'], verbose=True)
-
-
-# # Load some cropped (non-annotated) patches for AE training
-# I_cropped, meta_cropped = LoadCropped(crossval_cropped_folders, n_images_per_folder=5, excelFile=None, resize=AE_params['img_size'], verbose=True)
-
-
-
-#### 2. DATA SPLITING INTO INDEPENDENT SETS
-
-# # 2.0 Annotated set for FRed optimal threshold MIRAR QUE ESTE BIEN
-# ann_meta["PatID"] = ann_meta["PatID"].astype(str)
-# df_diag["CODI"] = df_diag["CODI"].astype(str)
-# meta_ann = ann_meta.merge(df_diag, left_on="PatID", right_on="CODI", how="left")
-
-# # Keep only patches manually labeled (Presence in {1, -1})
-# meta_ann = meta_ann[meta_ann["Presence"].isin([1, -1])]
-# print(f"Annotated patches used for threshold calibration: {len(meta_ann)}")
-
-# # True labels and corresponding images
-# y_true_ann = (meta_ann["Presence"] == 1).astype(int).values
-# X_ann = ann_ims[:len(meta_ann)]  # ensure same length if some removed
-
-# 2.1 AE trainnig set
-
-# 2.1 Diagosis crossvalidation set
-
 #### 3. lOAD PATCHES
+print(ae_train_ims.shape)
+print(ae_train_ims[0])
+def _to_dataset(ims, meta, with_labels=False):
+    X = np.stack([im.transpose(2,0,1) for im in ims], axis=0) / 255.0  #Puede que esté aquí el problema de las dimensiones?
+    if with_labels:
+        y = np.array([m['Presence'] for m in meta], dtype=np.int64)
+        return Standard_Dataset(X, y)
+    else:
+        return Standard_Dataset(X)
+
+ae_train_ds = _to_dataset(ae_train_ims, ae_train_meta, with_labels=False)
+ae_train_loader = DataLoader(ae_train_ds, batch_size=AE_params['batch_size'], shuffle=True)
 
 ### 4. AE TRAINING
 
-# EXPERIMENTAL DESIGN:
-# TRAIN ON AE PATIENTS AN AUTOENCODER, USE THE ANNOTATED PATIENTS TO SET THE
-# THRESHOLD ON FRED, VALIDATE FRED FOR DIAGNOSIS ON A 10 FOLD SCHEME OF REMAINING
-# CASES.
+Config='1'
+net_paramsEnc,net_paramsDec,inputmodule_paramsDec=AEConfigs(Config)
+model=AutoEncoderCNN(inputmodule_paramsEnc, net_paramsEnc,
+                     inputmodule_paramsDec, net_paramsDec)
+# 4.2 Model Training
+optimizer = optim.Adam(model.parameters(), lr=AE_params['lr'], weight_decay=AE_params['weight_decay'])
+criterion = nn.MSELoss()
 
-# 4.1 Data Split
+model.train()
+for epoch in range(AE_params['epochs']):
+    epoch_loss = 0.0
+    for batch in ae_train_loader:
+        x = batch[0].to(AE_params['device']).to(torch.float32)  # Standard_Dataset devuelve (X,) para unlabeled
+        print(x.shape)
+        print(x[0])
+        optimizer.zero_grad()
+        recon = model(x)
+        loss = criterion(recon, x)
+        loss.backward()
+        optimizer.step()
+        epoch_loss += loss.item() * x.size(0)
+    epoch_loss /= len(ae_train_ds)
+    print(f"[AE][Epoch {epoch+1}/{AE_params['epochs']}] loss={epoch_loss:.5f}")
 
 
-# ###### CONFIG1
-# Config='1'
-# net_paramsEnc,net_paramsDec,inputmodule_paramsDec=AEConfigs(Config)
-# model=AutoEncoderCNN(inputmodule_paramsEnc, net_paramsEnc,
-#                      inputmodule_paramsDec, net_paramsDec)
-# # 4.2 Model Training
+Path('checkpoints').mkdir(exist_ok=True)
+torch.save(model.state_dict(), 'checkpoints/AE_System1.pth') # save model 
 
-# # Free GPU Memory After Training
+# Free GPU Memory Aft er Training
 # gc.collect()
 # torch.cuda.empty_cache()
-# #### 5. AE RED METRICS THRESHOLD LEARNING
 
-# ## 5.1 AE Model Evaluation
 
-# # Free GPU Memory After Evaluation
-# gc.collect()
-# torch.cuda.empty_cache()
-
-# ## 5.2 RedMetrics Threshold 
-
-# ### 6. DIAGNOSIS CROSSVALIDATION
-# ### 6.1 Load Patches 4 CrossValidation of Diagnosis
-
-# ### 6.2 Diagnostic Power
 
