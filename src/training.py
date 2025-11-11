@@ -362,10 +362,9 @@ print(ae_train_meta.head())
 
 
 #### 3. lOAD PATCHES
-print(ae_train_ims.shape)
-print(ae_train_ims[0])
+print("Shape before images to dataset and dataloader: "+str(ae_train_ims.shape))
 def _to_dataset(ims, meta, with_labels=False):
-    X = np.stack([im.transpose(2,0,1) for im in ims], axis=0) / 255.0  #Puede que esté aquí el problema de las dimensiones?
+    X = np.stack([im.transpose(2,0,1) for im in ims], axis=0) / 255.0  #? Puede que esté aquí el problema de las dimensiones?
     if with_labels:
         y = np.array([m['Presence'] for m in meta], dtype=np.int64)
         return Standard_Dataset(X, y)
@@ -389,9 +388,8 @@ model.train()
 for epoch in range(AE_params['epochs']):
     epoch_loss = 0.0
     for batch in ae_train_loader:
-        x = batch[0].to(AE_params['device']).to(torch.float32)  # Standard_Dataset devuelve (X,) para unlabeled
-        print(x.shape)
-        print(x[0])
+        x = batch.to(AE_params['device']).to(torch.float32)  # Standard_Dataset devuelve (X,) para unlabeled
+        print("Shape after dataloader: "+str(x.shape))
         optimizer.zero_grad()
         recon = model(x)
         loss = criterion(recon, x)
