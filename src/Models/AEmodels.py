@@ -14,8 +14,8 @@ import torch.nn.functional as F
 from torch import Tensor
 from numpy.matlib import repmat
 
-from models_init import *
-from NetBlocks import _CNNBlock,_UnCNNLayer
+from Models.models_init import *
+from Models.NetBlocks import _CNNBlock,_UnCNNLayer
 
 
 
@@ -224,13 +224,13 @@ class VAECNN(nn.Module):
         input_sze=x.shape
 
         x=self.encoder(x) # (Nbatch,NChannel,Sze)--> (Nbatch,LastHidden,Sze')
-        x_dim=x.shape[-1]
-        x=x.view(x.size(0), -1) # (Nbatch,LastHidden,Sze') --> (NBatch,LastHidden*Sze')
+        B, C, H, W=x.shape # shape for 2D data
+        x=x.view(B, -1) # (Nbatch,LastHidden,Sze') --> (NBatch, z_dim)
         z, mu, logvar =self.representation(x) # (NBatch,LastHidden*Sze')-->(NBatch,z_dim)-->(NBatch,LastHidden*Sze')
-        z=z.view(z.shape[0], int(z.shape[1]/x_dim),x_dim) # (NBatch,LastHidden*Sze') -->  (Nbatch,LastHidden,Sze')
-        x=self.decoder(z)
+        z=z.view(B, C, H, W) # (NBatch, z_dim) --> (NBatch,LastHidden,Sze')
+        x_recon = self.decoder(z)
              
-        return x, mu, logvar
+        return x_recon, mu, logvar
     
 # Standard Autoencoder
 class AutoEncoderCNN(nn.Module):

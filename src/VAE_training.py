@@ -1,34 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Wed Apr 10 16:14:32 2024
-
-Example of Main Steps for the Detection of HPilory using AutoEncoders for
-the detection of anomalous pathological staining
-
-Guides:
-    0. Implement 2 functions for Loading Windows and metadata:
-        0.1 LoadCropped to load a list of images from the Cropped folder
-            inputs: list of folders containing the images, number of images to load for each folder,
-                    ExcelFile with metadata
-            out: Ims: list of images
-                 metadata: list/array of information for each image in Ims
-                           (PatID, imfilename)
-        0.1 LoadAnnotated to load a list of images from the Annotated folder
-            inputs: list of folders containing the images, number of images to load for each folder,
-                    ExcelFile with metadata
-            out: Ims: list of images
-                 metadata: list/array of information for each image in Ims
-                           (PatID, imfilename,presenceHelico)
-                           
-    1. Split Code into train and test steps 
-    2. Save trainned models and any intermediate result input of the next step
-    
-@authors: debora gil, pau cano
-email: debora@cvc.uab.es, pcano@cvc.uab.es
-Reference: https://arxiv.org/abs/2309.16053 
-
-"""
-
 # IO Libraries
 import sys
 import os
@@ -57,10 +26,10 @@ import json
 
 
 ## Own Functions
-from Models.AEmodels import AutoEncoderCNN
+from Models.AEmodels import VAECNN, Encoder
 from Models.datasets import Standard_Dataset
 
-from config import CROPPED_PATCHES_DIR, ANNOTATED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE, ANNOTATED_METADATA_FILE
+from auxili import CROPPED_PATCHES_DIR, ANNOTATED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE, ANNOTATED_METADATA_FILE
 
 
 def AEConfigs(Config):
@@ -348,7 +317,7 @@ inputmodule_paramsEnc={}
 inputmodule_paramsEnc['num_input_channels']=3
 
 # 0.1 NETWORK TRAINING PARAMS
-AE_params = {
+VAE_params = {
     'epochs': 25,
     'batch_size': 64,
     'lr': 1e-3,
@@ -368,7 +337,7 @@ df_diag = pd.read_csv(PATIENT_DIAGNOSIS_FILE) if os.path.isfile(PATIENT_DIAGNOSI
 # 1.2 Patches Data
 ae_train_ims, ae_train_meta = LoadCropped(
     crossval_cropped_folders, n_images_per_folder=5, excelFile=PATIENT_DIAGNOSIS_FILE,
-    resize=AE_params['img_size']
+    resize=VAE_params['img_size']
 )
 print("Cropped loaded:", ae_train_ims.shape, ae_train_meta.shape)
 print(ae_train_meta.head())
@@ -377,7 +346,7 @@ print(ae_train_meta.head())
 # Annotated para aprender umbral de error (ROC)
 ann_ims, ann_meta = LoadAnnotated(
     annotated_folders, n_images_per_folder=5, excelFile=ANNOTATED_METADATA_FILE,
-    resize=AE_params['img_size']
+    resize=VAE_params['img_size']
 )
 print("Annotated loaded:", ann_ims.shape, ann_meta.shape)
 print(ann_meta.head())
@@ -406,13 +375,13 @@ def _to_dataset(ims, meta, with_labels=False):
         return Standard_Dataset(X)
 
 ae_train_ds = _to_dataset(ae_train_ims, ae_train_meta, with_labels=False)
-ae_train_loader = DataLoader(ae_train_ds, batch_size=AE_params['batch_size'],
+ae_train_loader = DataLoader(ae_train_ds, batch_size=VAE_params['batch_size'],
                              shuffle=True)
 
-ann_ds = _to_dataset(ann_ims, ann_meta, with_labels=True)
+# ann_ds = _to_dataset(ann_ims, ann_meta, with_labels=True)
 
-ann_loader = DataLoader(ann_ds, batch_size=AE_params['batch_size'], 
-                        shuffle=False, num_workers=2)
+# ann_loader = DataLoader(ann_ds, batch_size=VAE_params['batch_size'], 
+#                         shuffle=False, num_workers=2)
 
 ### 4. AE TRAINING
 
@@ -424,49 +393,80 @@ ann_loader = DataLoader(ann_ds, batch_size=AE_params['batch_size'],
 # 4.1 Data Split
 
 ###### CONFIG1
-Config='3'
+Config='1'
 net_paramsEnc,net_paramsDec,inputmodule_paramsDec=AEConfigs(Config)
-model=AutoEncoderCNN(inputmodule_paramsEnc, net_paramsEnc,
-                     inputmodule_paramsDec, net_paramsDec)
+
+tmp_encoder = Encoder(inputmodule_paramsEnc, net_paramsEnc)
+tmp_encoder.eval()
+
+with torch.no_grad():
+    dummy = torch.zeros(
+        1,
+        inputmodule_paramsEnc['num_input_channels'],
+        VAE_params['img_size'][0],
+        VAE_params['img_size'][1],
+    )
+    h = tmp_encoder(dummy)          # (1, C', H', W')
+    h_dim = h.view(1, -1).size(1)   # flatten → size h_dim
+
+# define the parameters for the bottleneck representation
+net_paramsRep = {
+    'h_dim': h_dim,
+    'z_dim': 64,  
+}
+
+
+model=VAECNN(inputmodule_paramsEnc, net_paramsEnc, 
+             inputmodule_paramsDec, net_paramsDec,
+             net_paramsRep).to(VAE_params['device'])
+
 # 4.2 Model Training
-optimizer = optim.Adam(model.parameters(), lr=AE_params['lr'], weight_decay=AE_params['weight_decay'])
-criterion = nn.MSELoss()
+optimizer = optim.Adam(model.parameters(), lr=VAE_params['lr'], weight_decay=VAE_params['weight_decay'])
+criterion = nn.MSELoss(reduction='mean')
+
+beta = 0.0  
+
+# KL for element and then the mean over batch 
+def kl_loss(mu, logvar):
+    return -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+
 
 model.train()
-for epoch in range(AE_params['epochs']):
-    epoch_loss = 0.0
+for epoch in range(VAE_params['epochs']):
+    epoch_loss = 0.0 # total loss
+    epoch_recon = 0.0 # reconstruction loss
+    epoch_kl = 0.0 # KL divergence loss
+
     for batch in ae_train_loader:
-        x = batch.to(AE_params['device']).to(torch.float32)  # Standard_Dataset devuelve (X,) para unlabeled
+        x = batch.to(VAE_params['device']).to(torch.float32)  
         print("Shape after dataloader: "+str(x.shape))
         optimizer.zero_grad()
-        recon = model(x)
-        loss = criterion(recon, x)
+
+        x_recon, mu, logvar = model(x) # forward pass (edited for VAE)
+        
+        recon_loss = criterion(x_recon, x)
+        kl = kl_loss(mu, logvar)
+        loss = recon_loss + beta * kl
+
         loss.backward()
         optimizer.step()
-        epoch_loss += loss.item() * x.size(0)
+
+        batch_size = x.size(0)
+        epoch_loss += loss.item() * batch_size
+        epoch_recon += recon_loss.item() * batch_size
+        epoch_kl += kl.item() * batch_size
+
     epoch_loss /= len(ae_train_ds)
-    print(f"[AE][Epoch {epoch+1}/{AE_params['epochs']}] loss={epoch_loss:.5f}")
+    epoch_recon /= len(ae_train_ds)
+    epoch_kl /= len(ae_train_ds)
+
+    print(f"[VAE][Epoch {epoch+1}/{VAE_params['epochs']}] loss={epoch_loss:.5f} | recon={epoch_recon:.5f} | kld={epoch_kl:.5f}")
 
 
 Path('checkpoints').mkdir(exist_ok=True)
-torch.save(model.state_dict(), 'checkpoints/AE_System3.pth') # save model 
+torch.save(model.state_dict(), 'checkpoints/VAE_System1.pth') # save model 
 
-# Free GPU Memory Aft er Training
+# Free GPU Memory After Training
 gc.collect()
 torch.cuda.empty_cache()
-
-#### 5. AE RED METRICS THRESHOLD LEARNING
-
-## 5.1 AE Model Evaluation
-
-# Free GPU Memory After Evaluation
-gc.collect()
-torch.cuda.empty_cache()
-
-## 5.2 RedMetrics Threshold 
-
-### 6. DIAGNOSIS CROSSVALIDATION
-### 6.1 Load Patches 4 CrossValidation of Diagnosis
-
-### 6.2 Diagnostic Power
 

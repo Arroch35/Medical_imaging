@@ -1,6 +1,6 @@
 from pathlib import Path
 
-DATA_DIR = Path("C:\Users\janaz\Documents\uni\YEAR 4 - S1\vision and learning\CrossValidation")
+DATA_DIR = Path("C:/Users/janaz/Documents/uni/YEAR 4 - S1/vision and learning/CrossValidation")
 
 CROPPED_PATCHES_DIR = DATA_DIR / "Cropped"
 ANNOTATED_PATCHES_DIR = DATA_DIR / "Annotated"
