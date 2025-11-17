@@ -29,7 +29,7 @@ import json
 from Models.AEmodels import VAECNN, Encoder
 from Models.datasets import Standard_Dataset
 
-from auxili import CROPPED_PATCHES_DIR, ANNOTATED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE, ANNOTATED_METADATA_FILE
+from config import CROPPED_PATCHES_DIR, ANNOTATED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE, ANNOTATED_METADATA_FILE
 
 
 def AEConfigs(Config):
