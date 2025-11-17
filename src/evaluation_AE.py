@@ -39,6 +39,8 @@ import numpy as np
 import pandas as pd
 import glob
 from PIL import Image
+from sklearn.metrics import roc_curve, auc
+import matplotlib.pyplot as plt
 
 # Torch Libraries
 from torch.utils.data import DataLoader
@@ -124,131 +126,17 @@ def _window_id_from_filename(fname):
     name, _ = os.path.splitext(base)
     return name
 
-def LoadCropped(list_folders, n_images_per_folder=None, excelFile=None, resize=None, verbose=False):
+
+def LoadAnnotated(list_folders, patient_excel, n_images_per_folder=None, excelFile=None, resize=None, verbose=False):
     """
-    Load cropped patches (non-annotated), optionally resizing images.
-    If a PatientDiagnosis.csv file (with columns CODI, DENSITAT) is provided,
-    only patches from healthy patients (DENSITAT == 'NEGATIVA') are loaded.
-
-    Parameters
-    ----------
-    list_folders : list of str
-        Paths containing .png patches (e.g. PatID_Section# folders)
-    n_images_per_folder : int or None
-        Limit number of patches per folder (first N if provided)
-    excelFile : str or None
-        Path to PatientDiagnosis.csv (columns: CODI, DENSITAT)
-    resize : tuple(int, int) or None
-        Target image size (H, W). If None, keep original 256x256.
-    verbose : bool
-        Print progress messages if True.
-
-    Returns
-    -------
-    Ims : np.ndarray
-        Array of images with shape (N, H, W, 3), dtype=uint8
-    metadata : pd.DataFrame
-        DataFrame with columns ['PatID', 'imfilename']
-    """
-    
-    healthy_pats = None
-    all_patids = set()
-    skipped_patids = set()
-
-    if excelFile is not None:
-        if not os.path.exists(excelFile):
-            raise FileNotFoundError(f"[LoadCropped] File not found: {excelFile}")
-
-        try:
-            df_diag = pd.read_csv(excelFile)
-        except Exception:
-            df_diag = pd.read_excel(excelFile)
-
-        # Normalize column names
-        df_diag.columns = [c.strip().upper() for c in df_diag.columns]
-        if not {"CODI", "DENSITAT"}.issubset(df_diag.columns):
-            raise ValueError("Diagnosis file must contain columns: 'CODI' and 'DENSITAT'")
-
-        # Select healthy patients: DENSITAT == 'NEGATIVA'
-        healthy_mask = df_diag["DENSITAT"].astype(str).str.upper().str.strip() == "NEGATIVA"
-        healthy_pats = set(df_diag.loc[healthy_mask, "CODI"].astype(str))
-        if verbose:
-            print(f"[LoadCropped] Found {len(healthy_pats)} healthy patients in {excelFile}")
-
-
-    records, images = [], []
-
-    for folder in list_folders:
-        folder_name = os.path.basename(os.path.normpath(folder))
-        patid = folder_name.split("_")[0]  
-        all_patids.add(patid)
-
-        # Skip if not a healthy patient (if CSV provided)
-        if healthy_pats is not None and patid not in healthy_pats:
-            skipped_patids.add(patid)
-            if verbose:
-                print(f"[LoadCropped] Skipping non-healthy patient: {patid}")
-            continue
-
-        if not os.path.isdir(folder):
-            if verbose:
-                print(f"[LoadCropped] Folder not found, skipping: {folder}")
-            continue
-
-        files = sorted(glob.glob(os.path.join(folder, "*.png")))
-        if n_images_per_folder is not None:
-            files = files[:n_images_per_folder]
-
-        for fpath in files:
-            try:
-                im = Image.open(fpath).convert("RGB")
-                if resize is not None:
-                    im = im.resize(resize, Image.BILINEAR)
-                arr = np.asarray(im, dtype=np.uint8)
-            except Exception as e:
-                if verbose:
-                    print(f"[LoadCropped] Failed to read {fpath}: {e}")
-                continue
-
-            filename = os.path.basename(fpath)
-            record = {"PatID": patid, "imfilename": filename}
-            records.append(record)
-            images.append(arr)
-
-
-    # Calculate percentage of non-healthy patients
-    total_patients = len(all_patids)
-    non_healthy_count = len(skipped_patids)
-    if total_patients > 0:
-        perc_non_healthy = 100 * non_healthy_count / total_patients
-    else:
-        perc_non_healthy = 0.0
-
-    if verbose:
-        print(f"[LoadCropped] Total patients found: {total_patients}")
-        print(f"[LoadCropped] Non-healthy patients skipped: {non_healthy_count} ({perc_non_healthy:.2f}%)")
-        print(f"[LoadCropped] Loaded {len(images)} images from {len(records)} healthy patients.")
-
-
-    if len(images) == 0:
-        H, W = resize if resize is not None else (256, 256)
-        Ims = np.zeros((0, H, W, 3), dtype=np.uint8)
-    else:
-        Ims = np.stack(images, axis=0).astype(np.uint8)
-
-    metadata = pd.DataFrame.from_records(records)
-    if verbose:
-        print(f"[LoadCropped] Loaded {len(images)} images from {len(metadata['PatID'].unique())} healthy patients.")
-    return Ims, metadata
-
-def LoadAnnotated(list_folders, n_images_per_folder=None, excelFile=None, resize=None, verbose=False):
-    """
-    Load annotated patches (presence of H. pylori known), optionally resizing images.
+    Load annotated patches for patients with **non-negative diagnosis**, and compute the percentage.
 
     Parameters
     ----------
     list_folders : list
         Paths containing annotated .png patches
+    patient_excel : str
+        Excel/CSV file with patient diagnoses (columns: 'CODI', 'DENSITAT')
     n_images_per_folder : int or None
         Limit number of patches per folder (first N if provided)
     excelFile : str or None
@@ -265,6 +153,38 @@ def LoadAnnotated(list_folders, n_images_per_folder=None, excelFile=None, resize
     metadata : pd.DataFrame
         DataFrame with columns ['PatID', 'imfilename', 'Presence']
     """
+    # Load patient diagnosis file
+    if not os.path.exists(patient_excel):
+        raise FileNotFoundError(f"[LoadAnnotatedPositivePatients] Patient file not found: {patient_excel}")
+    
+    try:
+        df_patients = pd.read_csv(patient_excel)
+    except Exception:
+        df_patients = pd.read_excel(patient_excel)
+
+    df_patients.columns = [c.strip().upper() for c in df_patients.columns]
+    if not {"CODI", "DENSITAT"}.issubset(df_patients.columns):
+        raise ValueError("Patient file must contain columns: 'CODI' and 'DENSITAT'")
+
+    # Keep only non-negative patients
+    non_negative_pats = set(df_patients.loc[df_patients['DENSITAT'].str.upper().str.strip() != "NEGATIVA", "CODI"].astype(str))
+
+    # Track all patients in the folders
+    all_patients = set()
+    for folder in list_folders:
+        folder_name = os.path.basename(os.path.normpath(folder))
+        patid = folder_name.split("_")[0] if "_" in folder_name else folder_name
+        all_patients.add(patid)
+
+    # Compute percentage
+    total_patients = len(all_patients)
+    non_negative_count = len([p for p in all_patients if p in non_negative_pats])
+    perc_non_negative = 100 * non_negative_count / total_patients if total_patients > 0 else 0.0
+    if verbose:
+        print(f"[LoadAnnotated] Total patients found: {total_patients}")
+        print(f"[LoadAnnotated] Non-negative patients: {non_negative_count} ({perc_non_negative:.2f}%)")
+
+    # Load annotation metadata
     df = _read_metadata_excel(excelFile)
     records = []
     images = []
@@ -274,6 +194,14 @@ def LoadAnnotated(list_folders, n_images_per_folder=None, excelFile=None, resize
             if verbose:
                 print(f"[LoadAnnotated] folder not found, skipping: {folder}")
             continue
+
+        folder_name = os.path.basename(os.path.normpath(folder))
+        patid = folder_name.split("_")[0] if "_" in folder_name else folder_name
+
+        # Skip if patient is negative
+        if patid not in non_negative_pats:
+            continue
+
         files = sorted(glob.glob(os.path.join(folder, "*.png")))
         if n_images_per_folder is not None:
             files = files[:n_images_per_folder]
@@ -291,15 +219,10 @@ def LoadAnnotated(list_folders, n_images_per_folder=None, excelFile=None, resize
 
             filename = os.path.basename(fpath)
             window_id = _window_id_from_filename(filename)
-            folder_name = os.path.basename(os.path.normpath(folder))
-            if "_" in folder_name:
-                patid, section = folder_name.split("_", 1)
-            else:
-                patid = folder_name
-                section = ""
 
+            # Get presence if excelFile is provided
             presence_val = None
-            if not df.empty:
+            if df is not None and not df.empty:
                 if 'Aug' in window_id:
                     parts = window_id.split('_')
                     window_id_clean = f"{int(parts[0])}_{parts[1]}"
@@ -311,14 +234,12 @@ def LoadAnnotated(list_folders, n_images_per_folder=None, excelFile=None, resize
 
                 m = df[df['Window_ID'].astype(str).str.strip() == window_id_clean]
                 if m.empty and 'Pat_ID' in df.columns:
-                    m = df[(df['Window_ID'].astype(str).str.strip() == window_id_clean)
-                           & (df['Pat_ID'].astype(str).str.strip() == patid)]
-                if m.empty:
-                    m = df[df['Window_ID'].astype(str).str.strip() == filename]
+                    m = df[(df['Window_ID'].astype(str).str.strip() == window_id_clean) &
+                           (df['Pat_ID'].astype(str).str.strip() == patid)]
                 if not m.empty and 'Presence' in m.columns:
                     presence_val = m.iloc[0]['Presence']
 
-                if presence_val == 0 or presence_val == None:
+                if presence_val not in [-1, 1]:
                     continue
 
             record = {'PatID': patid, 'imfilename': filename, 'Presence': presence_val}
@@ -332,6 +253,8 @@ def LoadAnnotated(list_folders, n_images_per_folder=None, excelFile=None, resize
         Ims = np.stack(images, axis=0).astype(np.uint8)
 
     metadata = pd.DataFrame.from_records(records)
+    if verbose:
+        print(f"[LoadAnnotated] Loaded {len(images)} images from {len(metadata['PatID'].unique())} non-negative patients.")
     return Ims, metadata
 
 def get_all_subfolders(root_dir):
@@ -346,16 +269,13 @@ def get_all_subfolders(root_dir):
     subfolders = sorted(subfolders)
     return subfolders
 
-
-
-
 # 0.1 AE PARAMETERS
 inputmodule_paramsEnc={}
 inputmodule_paramsEnc['num_input_channels']=3
 
 # 0.1 NETWORK TRAINING PARAMS
 AE_params = {
-    'epochs': 100,
+    'epochs': 1,
     'batch_size': 256,
     'lr': 1e-3,
     'weight_decay': 1e-5,
@@ -363,20 +283,17 @@ AE_params = {
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
 }
 
-
 #### 1. LOAD DATA: Implement 
 # 1.1 Patient Diagnosis
 df_diag = pd.read_csv(PATIENT_DIAGNOSIS_FILE) if os.path.isfile(PATIENT_DIAGNOSIS_FILE) else None
 
 
 # 1.2 Patches Data
-
 annotated_folders = get_all_subfolders(ANNOTATED_PATCHES_DIR)
-crossval_cropped_folders = get_all_subfolders(CROPPED_PATCHES_DIR)
 
-ae_train_ims, ae_train_meta = LoadCropped(
-    crossval_cropped_folders, n_images_per_folder=3, 
-    excelFile=PATIENT_DIAGNOSIS_FILE, resize=AE_params['img_size']
+ae_val_ims, ae_val_meta = LoadAnnotated(
+    annotated_folders, patient_excel=PATIENT_DIAGNOSIS_FILE,n_images_per_folder=1, 
+    excelFile=ANNOTATED_METADATA_FILE, resize=AE_params['img_size'], verbose=True
 )
 
 
@@ -384,82 +301,106 @@ ae_train_ims, ae_train_meta = LoadCropped(
 def _to_dataset(ims, meta, with_labels=False):
     X = np.stack([im.transpose(2,0,1) for im in ims], axis=0) / 255.0 
     if with_labels:
-        y = np.array([m['Presence'] for m in meta], dtype=np.int64)
+        y = meta['Presence'].to_numpy(dtype=np.int64) 
         return Standard_Dataset(X, y)
     else:
         return Standard_Dataset(X)
 
-ae_train_ds = _to_dataset(ae_train_ims, ae_train_meta, with_labels=False)
-ae_train_loader = DataLoader(ae_train_ds, batch_size=AE_params['batch_size'], shuffle=True)
+ae_val_ds = _to_dataset(ae_val_ims, ae_val_meta, with_labels=True)
+ae_val_loader = DataLoader(ae_val_ds, batch_size=AE_params['batch_size'], shuffle=True)
 
-### 4. AE TRAINING
+# Evaluation:
 
+inputmodule_paramsEnc = {'num_input_channels': 3} 
 configs_to_run = ['1', '2', '3']
 
-for Config in configs_to_run:
-    print(f"\n===== Training AE with CONFIG {Config} =====")
+checkpoint_paths = [f'checkpoints/AE_Config{c}.pth' for c in configs_to_run]
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    net_paramsEnc, net_paramsDec, inputmodule_paramsDec = AEConfigs(Config)
-    model = AutoEncoderCNN(inputmodule_paramsEnc, net_paramsEnc,
-                           inputmodule_paramsDec, net_paramsDec)
-    model.to(AE_params['device'])
+# --- 1. Load Models into a List ---
+loaded_models = []
+model_configs = [] # To keep track of which config belongs to which model
+ae_losses_dict = {}
 
-    # Initialize W&B run for this configuration
-    wandb.init(
-        project="autoencoder_hp",
-        name=f"AE_Config{Config}",
-        dir=f"wandb_runs/AE_Config{Config}", 
-        mode="offline",
-        config={
-            "epochs": AE_params['epochs'],
-            "batch_size": AE_params['batch_size'],
-            "lr": AE_params['lr'],
-            "weight_decay": AE_params['weight_decay'],
-            "img_size": AE_params['img_size'],
-            "model": "AutoEncoderCNN",
-            "optimizer": "Adam",
-            "config": Config
-        }
+for config_id, path in zip(configs_to_run, checkpoint_paths):
+    print(f"Loading model for Config {config_id} from {path}...")
+    
+    # 1. Instantiate the correct architecture for this config
+    net_paramsEnc, net_paramsDec, inputmodule_paramsDec = AEConfigs(config_id)
+    
+    model = AutoEncoderCNN(
+        inputmodule_paramsEnc, net_paramsEnc,
+        inputmodule_paramsDec, net_paramsDec
     )
-    config_wandb = wandb.config
 
-    # Optimizer and loss
-    optimizer = optim.Adam(model.parameters(), lr=config_wandb.lr, weight_decay=config_wandb.weight_decay)
-    criterion = nn.MSELoss()
+    model.load_state_dict(torch.load(path, map_location=device))
+    model.to(device)
+    model.eval() # Set to evaluation mode (important for inference/evaluation)
+    
+    loaded_models.append(model)
+    model_configs.append(config_id)
+    print(f"Successfully loaded Config {config_id}.")
 
-    # Training loop
-    model.train()
-    for epoch in range(config_wandb.epochs):
-        epoch_loss = 0.0
-        for batch in ae_train_loader:
-            x = batch.to(torch.float32).to(AE_params['device'])
-            optimizer.zero_grad()
+
+    all_losses = []
+
+    with torch.no_grad():
+        for batch in ae_val_loader:  # validation DataLoader
+            x = batch[0].to(torch.float32).to(AE_params['device'])  # assuming batch = (X,) or (X, y)
             recon = model(x)
-            loss = criterion(recon, x)
-            loss.backward()
-            optimizer.step()
-            epoch_loss += loss.item() * x.size(0)
-        epoch_loss /= len(ae_train_ds)
+            # Compute per-sample MSE
+            batch_losses = ((x - recon)**2).mean(dim=[1,2,3])  # MSE per image
+            all_losses.extend(batch_losses.cpu().numpy())
 
-        if (epoch + 1) % 10 == 0 or epoch == 0:
-            print(f"[AE Config {Config}][Epoch {epoch+1}/{config_wandb.epochs}] loss={epoch_loss:.5f}")
+    all_losses = np.array(all_losses)
+    ae_losses_dict[path] = all_losses
 
-        wandb.log({"train_loss": epoch_loss, "epoch": epoch+1})
+    y_true = []
+    for _, y in ae_val_loader:
+        y_true.extend(y.numpy())
+    y_true = np.array(y_true)
 
-    # Save model checkpoint
-    Path('checkpoints').mkdir(exist_ok=True)
-    checkpoint_path = f'checkpoints/AE_Config{Config}.pth'
-    torch.save(model.state_dict(), checkpoint_path)
-    print(f"Saved model for Config {Config} at {checkpoint_path}")
+    print(f"losses: {all_losses[0]}, y_true: {y_true[0]}")
+    print(set(y_true))
+    # ROC curve
 
-    # Free GPU memory after each config
-    # del model, optimizer, criterion
-    # torch.cuda.empty_cache()
-    # gc.collect()
+    fpr, tpr, thresholds = roc_curve(y_true, all_losses)
+    roc_auc = auc(fpr, tpr)
 
-    # wandb.finish()
+    plt.figure(figsize=(6,6))
+    plt.plot(fpr, tpr, label=f'ROC curve (AUC = {roc_auc:.3f})')
+    plt.plot([0,1], [0,1], 'k--')  # diagonal
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('ROC Curve for AE Reconstruction')
+    plt.legend()
+    plt.show()
+
+
+    #Decide threshold
+    # Option 1: You can pick threshold at maximum Youden’s J statistic
+    J = tpr - fpr
+    idx = np.argmax(J)
+    best_threshold = thresholds[idx]
+    print("Best threshold:", best_threshold)
+
+    # Apply threshold
+    y_pred = (all_losses > best_threshold).astype(int)
+
+
+# Compare multiple AEs
+plt.figure(figsize=(6,6))
+for ae_name, losses in ae_losses_dict.items():
+    fpr, tpr, _ = roc_curve(y_true, losses)
+    plt.plot(fpr, tpr, label=f'{ae_name} (AUC={auc(fpr, tpr):.3f})')
+plt.plot([0,1],[0,1],'k--')
+plt.xlabel('FPR')
+plt.ylabel('TPR')
+plt.legend()
+plt.show()
 
 
 #TODO: 
 # Hacer aquí un training simple de los tres models con pocas imagenes para probar el evaluation
 # Acabar el evaluation con lo de la ROC curve y threshols y tal (todo esta en el chatgpt) 
+# ? Tengo que evitar tambien que se cojan imagenes con presence = 0, porque esto es que no estan anotados. Mirar primero si hay presencia 0.0

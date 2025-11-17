@@ -209,3 +209,10 @@ __marimo__/
 
 # Data
 data/
+
+#wandb
+src/wandb
+src/wndb_runs
+
+#models
+src/checkpoints
