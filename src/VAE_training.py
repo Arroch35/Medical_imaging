@@ -14,6 +14,8 @@ import gc
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
+
 
 
   # your provided dataset wrapper
@@ -28,9 +30,9 @@ import json
 ## Own Functions
 from Models.AEmodels import VAECNN, Encoder
 from Models.datasets import Standard_Dataset
-
+from utils import *
 from config import CROPPED_PATCHES_DIR, ANNOTATED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE, ANNOTATED_METADATA_FILE
-from train_utils import *
+
 
 def AEConfigs(Config):
     net_paramsEnc={}
@@ -67,13 +69,13 @@ def AEConfigs(Config):
 
 
 ######################### 0. EXPERIMENT PARAMETERS
+
+
 crossval_cropped_folders = get_all_subfolders(CROPPED_PATCHES_DIR)
 annotated_folders = get_all_subfolders(ANNOTATED_PATCHES_DIR)
 
 
 print(f"Found {len(crossval_cropped_folders)} cropped folders and {len(annotated_folders)} annotated folders.")
-
-
 # 0.1 AE PARAMETERS
 inputmodule_paramsEnc={}
 inputmodule_paramsEnc['num_input_channels']=3
@@ -81,7 +83,7 @@ inputmodule_paramsEnc['num_input_channels']=3
 # 0.1 NETWORK TRAINING PARAMS
 VAE_params = {
     'epochs': 25,
-    'batch_size': 64,
+    'batch_size': 256,
     'lr': 1e-3,
     'weight_decay': 1e-5,
     'img_size': (128,128),   
@@ -93,30 +95,27 @@ VAE_params = {
 #### 1. LOAD DATA: Implement
 
 # 1.1 Patient Diagnosis
-df_diag = pd.read_csv(PATIENT_DIAGNOSIS_FILE) if os.path.isfile(PATIENT_DIAGNOSIS_FILE) else None
+crossval_cropped_folders = get_all_subfolders(CROPPED_PATCHES_DIR)
 
-
-# 1.2 Patches Data
 ae_train_ims, ae_train_meta = LoadCropped(
-    crossval_cropped_folders, n_images_per_folder=5, excelFile=PATIENT_DIAGNOSIS_FILE,
-    resize=VAE_params['img_size']
+    crossval_cropped_folders, n_images_per_folder=3,
+    excelFile=PATIENT_DIAGNOSIS_FILE, resize=VAE_params['img_size']
 )
+
 print("Cropped loaded:", ae_train_ims.shape, ae_train_meta.shape)
 print(ae_train_meta.head())
 
 
 # Annotated para aprender umbral de error (ROC)
-ann_ims, ann_meta = LoadAnnotated(
+"""ann_ims, ann_meta = LoadAnnotated(
     annotated_folders, n_images_per_folder=5, excelFile=ANNOTATED_METADATA_FILE,
     resize=VAE_params['img_size']
 )
 print("Annotated loaded:", ann_ims.shape, ann_meta.shape)
 print(ann_meta.head())
-
+"""
 
 print(f"Found {len(crossval_cropped_folders)} cropped folders and {len(annotated_folders)} annotated folders.")
-
-
 #### 2. DATA SPLITING INTO INDEPENDENT SETS
 
 # 2.0 Annotated set for FRed optimal threshold
@@ -129,7 +128,7 @@ print(f"Found {len(crossval_cropped_folders)} cropped folders and {len(annotated
 
 #this function takes images and metadata and returns a Standard_Dataset object 
 def _to_dataset(ims, meta, with_labels=False):
-    X = np.stack([im.transpose(2,0,1) for im in ims], axis=0) / 255.0  #? Puede que esté aquí el problema de las dimensiones?
+    X = np.stack([im.transpose(2,0,1) for im in ims], axis=0) / 255.0
     if with_labels:
         y = np.array([m['Presence'] for m in meta], dtype=np.int64)
         return Standard_Dataset(X, y)
@@ -137,8 +136,7 @@ def _to_dataset(ims, meta, with_labels=False):
         return Standard_Dataset(X)
 
 ae_train_ds = _to_dataset(ae_train_ims, ae_train_meta, with_labels=False)
-ae_train_loader = DataLoader(ae_train_ds, batch_size=VAE_params['batch_size'],
-                             shuffle=True)
+ae_train_loader = DataLoader(ae_train_ds, batch_size=VAE_params['batch_size'], shuffle=True)
 
 # ann_ds = _to_dataset(ann_ims, ann_meta, with_labels=True)
 
@@ -154,9 +152,9 @@ ae_train_loader = DataLoader(ae_train_ds, batch_size=VAE_params['batch_size'],
 
 # 4.1 Data Split
 
-###### 
-Config='2'
-net_paramsEnc,net_paramsDec,inputmodule_paramsDec=AEConfigs(Config)
+###### CONFIG1
+Config='3'
+net_paramsEnc, net_paramsDec, inputmodule_paramsDec=AEConfigs(Config)
 
 tmp_encoder = Encoder(inputmodule_paramsEnc, net_paramsEnc)
 tmp_encoder.eval()
@@ -176,7 +174,6 @@ net_paramsRep = {
     'h_dim': h_dim,
     'z_dim': 16,  
 }
-
 
 model=VAECNN(inputmodule_paramsEnc, net_paramsEnc, 
              inputmodule_paramsDec, net_paramsDec,
@@ -225,25 +222,21 @@ for epoch in range(VAE_params['epochs']):
         epoch_loss += loss.item() * batch_size
         epoch_recon += recon_loss.item() * batch_size
         epoch_kl += kl.item() * batch_size
-        # with torch.no_grad():
-        #     print(f"mu mean={mu.mean().item():.4f}, mu std={mu.std().item():.4f}, "
-        #         f"logvar mean={logvar.mean().item():.4f}, logvar std={logvar.std().item():.4f}")
+        with torch.no_grad():
+            print(f"mu mean={mu.mean().item():.4f}, mu std={mu.std().item():.4f}, "
+                f"logvar mean={logvar.mean().item():.4f}, logvar std={logvar.std().item():.4f}")
 
 
     epoch_loss /= len(ae_train_ds)
     epoch_recon /= len(ae_train_ds)
     epoch_kl /= len(ae_train_ds)
 
-    print(f"[VAE][Epoch {epoch+1}/{VAE_params['epochs']}] loss={epoch_loss:.5f} | recon={epoch_recon:.5f} | kld={epoch_kl:.5f}")
+    print(f"[VAE][Epoch {epoch+1}/{VAE_params['epochs']}] loss={epoch_loss:.5f} | recon={epoch_recon:.5f} | kld={epoch_kl:.5f}\n")
 
 
 Path('checkpoints').mkdir(exist_ok=True)
-torch.save(model.state_dict(), 'checkpoints/VAE_System2.pth') # save model 
+torch.save(model.state_dict(), 'checkpoints/VAE_System3.pth') # save model
 
 # Free GPU Memory After Training
 gc.collect()
 torch.cuda.empty_cache()
-
-
-
-

@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
+
 def _read_metadata_excel(excel_path):
     """
     Read an excel metadata file and return a DataFrame.
@@ -37,6 +38,7 @@ def _window_id_from_filename(fname):
     name, _ = os.path.splitext(base)
     return name
 
+
 def LoadCropped(list_folders, n_images_per_folder=None, excelFile=None, resize=None, verbose=False):
     """
     Load cropped patches (non-annotated), optionally resizing images.
@@ -63,7 +65,7 @@ def LoadCropped(list_folders, n_images_per_folder=None, excelFile=None, resize=N
     metadata : pd.DataFrame
         DataFrame with columns ['PatID', 'imfilename']
     """
-    
+
     healthy_pats = None
     if excelFile is not None:
         if not os.path.exists(excelFile):
@@ -85,12 +87,11 @@ def LoadCropped(list_folders, n_images_per_folder=None, excelFile=None, resize=N
         if verbose:
             print(f"[LoadCropped] Found {len(healthy_pats)} healthy patients in {excelFile}")
 
-
     records, images = [], []
 
     for folder in list_folders:
         folder_name = os.path.basename(os.path.normpath(folder))
-        patid = folder_name.split("_")[0]  
+        patid = folder_name.split("_")[0]
 
         # Skip if not a healthy patient (if CSV provided)
         if healthy_pats is not None and patid not in healthy_pats:
@@ -123,7 +124,6 @@ def LoadCropped(list_folders, n_images_per_folder=None, excelFile=None, resize=N
             records.append(record)
             images.append(arr)
 
-
     if len(images) == 0:
         H, W = resize if resize is not None else (256, 256)
         Ims = np.zeros((0, H, W, 3), dtype=np.uint8)
@@ -136,14 +136,16 @@ def LoadCropped(list_folders, n_images_per_folder=None, excelFile=None, resize=N
     return Ims, metadata
 
 
-def LoadAnnotated(list_folders, n_images_per_folder=None, excelFile=None, resize=None, verbose=False):
+def LoadAnnotated(list_folders, patient_excel, n_images_per_folder=None, excelFile=None, resize=None, verbose=False):
     """
-    Load annotated patches (presence of H. pylori known), optionally resizing images.
+    Load annotated patches for patients with **non-negative diagnosis**, and compute the percentage.
 
     Parameters
     ----------
     list_folders : list
         Paths containing annotated .png patches
+    patient_excel : str
+        Excel/CSV file with patient diagnoses (columns: 'CODI', 'DENSITAT')
     n_images_per_folder : int or None
         Limit number of patches per folder (first N if provided)
     excelFile : str or None
@@ -160,6 +162,39 @@ def LoadAnnotated(list_folders, n_images_per_folder=None, excelFile=None, resize
     metadata : pd.DataFrame
         DataFrame with columns ['PatID', 'imfilename', 'Presence']
     """
+    # Load patient diagnosis file
+    if not os.path.exists(patient_excel):
+        raise FileNotFoundError(f"[LoadAnnotatedPositivePatients] Patient file not found: {patient_excel}")
+
+    try:
+        df_patients = pd.read_csv(patient_excel)
+    except Exception:
+        df_patients = pd.read_excel(patient_excel)
+
+    df_patients.columns = [c.strip().upper() for c in df_patients.columns]
+    if not {"CODI", "DENSITAT"}.issubset(df_patients.columns):
+        raise ValueError("Patient file must contain columns: 'CODI' and 'DENSITAT'")
+
+    # Keep only non-negative patients
+    non_negative_pats = set(
+        df_patients.loc[df_patients['DENSITAT'].str.upper().str.strip() != "NEGATIVA", "CODI"].astype(str))
+
+    # Track all patients in the folders
+    all_patients = set()
+    for folder in list_folders:
+        folder_name = os.path.basename(os.path.normpath(folder))
+        patid = folder_name.split("_")[0] if "_" in folder_name else folder_name
+        all_patients.add(patid)
+
+    # Compute percentage
+    total_patients = len(all_patients)
+    non_negative_count = len([p for p in all_patients if p in non_negative_pats])
+    perc_non_negative = 100 * non_negative_count / total_patients if total_patients > 0 else 0.0
+    if verbose:
+        print(f"[LoadAnnotated] Total patients found: {total_patients}")
+        print(f"[LoadAnnotated] Non-negative patients: {non_negative_count} ({perc_non_negative:.2f}%)")
+
+    # Load annotation metadata
     df = _read_metadata_excel(excelFile)
     records = []
     images = []
@@ -169,6 +204,14 @@ def LoadAnnotated(list_folders, n_images_per_folder=None, excelFile=None, resize
             if verbose:
                 print(f"[LoadAnnotated] folder not found, skipping: {folder}")
             continue
+
+        folder_name = os.path.basename(os.path.normpath(folder))
+        patid = folder_name.split("_")[0] if "_" in folder_name else folder_name
+
+        # Skip if patient is negative
+        if patid not in non_negative_pats:
+            continue
+
         files = sorted(glob.glob(os.path.join(folder, "*.png")))
         if n_images_per_folder is not None:
             files = files[:n_images_per_folder]
@@ -186,15 +229,10 @@ def LoadAnnotated(list_folders, n_images_per_folder=None, excelFile=None, resize
 
             filename = os.path.basename(fpath)
             window_id = _window_id_from_filename(filename)
-            folder_name = os.path.basename(os.path.normpath(folder))
-            if "_" in folder_name:
-                patid, section = folder_name.split("_", 1)
-            else:
-                patid = folder_name
-                section = ""
 
+            # Get presence if excelFile is provided
             presence_val = None
-            if not df.empty:
+            if df is not None and not df.empty:
                 if 'Aug' in window_id:
                     parts = window_id.split('_')
                     window_id_clean = f"{int(parts[0])}_{parts[1]}"
@@ -206,14 +244,12 @@ def LoadAnnotated(list_folders, n_images_per_folder=None, excelFile=None, resize
 
                 m = df[df['Window_ID'].astype(str).str.strip() == window_id_clean]
                 if m.empty and 'Pat_ID' in df.columns:
-                    m = df[(df['Window_ID'].astype(str).str.strip() == window_id_clean)
-                           & (df['Pat_ID'].astype(str).str.strip() == patid)]
-                if m.empty:
-                    m = df[df['Window_ID'].astype(str).str.strip() == filename]
+                    m = df[(df['Window_ID'].astype(str).str.strip() == window_id_clean) &
+                           (df['Pat_ID'].astype(str).str.strip() == patid)]
                 if not m.empty and 'Presence' in m.columns:
                     presence_val = m.iloc[0]['Presence']
 
-                if presence_val == 0 or presence_val == None:
+                if presence_val not in [-1, 1]:
                     continue
 
             record = {'PatID': patid, 'imfilename': filename, 'Presence': presence_val}
@@ -227,7 +263,11 @@ def LoadAnnotated(list_folders, n_images_per_folder=None, excelFile=None, resize
         Ims = np.stack(images, axis=0).astype(np.uint8)
 
     metadata = pd.DataFrame.from_records(records)
+    if verbose:
+        print(
+            f"[LoadAnnotated] Loaded {len(images)} images from {len(metadata['PatID'].unique())} non-negative patients.")
     return Ims, metadata
+
 
 def get_all_subfolders(root_dir):
     """
