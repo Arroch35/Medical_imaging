@@ -241,6 +241,7 @@ def LoadAnnotated(list_folders, patient_excel, n_images_per_folder=None, excelFi
 
                 if presence_val not in [-1, 1]:
                     continue
+                if presence_val == -1: presence_val = 0 #ROC curve expects 0/1 values
 
             record = {'PatID': patid, 'imfilename': filename, 'Presence': presence_val}
             images.append(arr)
@@ -307,7 +308,7 @@ def _to_dataset(ims, meta, with_labels=False):
         return Standard_Dataset(X)
 
 ae_val_ds = _to_dataset(ae_val_ims, ae_val_meta, with_labels=True)
-ae_val_loader = DataLoader(ae_val_ds, batch_size=AE_params['batch_size'], shuffle=True)
+ae_val_loader = DataLoader(ae_val_ds, batch_size=AE_params['batch_size'], shuffle=False)
 
 # Evaluation:
 
@@ -321,6 +322,11 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 loaded_models = []
 model_configs = [] # To keep track of which config belongs to which model
 ae_losses_dict = {}
+
+y_true_list = []
+for _, y in ae_val_loader:
+    y_true_list.extend(y.numpy())
+y_true = np.array(y_true_list)
 
 for config_id, path in zip(configs_to_run, checkpoint_paths):
     print(f"Loading model for Config {config_id} from {path}...")
@@ -355,14 +361,19 @@ for config_id, path in zip(configs_to_run, checkpoint_paths):
     all_losses = np.array(all_losses)
     ae_losses_dict[path] = all_losses
 
-    y_true = []
-    for _, y in ae_val_loader:
-        y_true.extend(y.numpy())
-    y_true = np.array(y_true)
+    # y_true = []
+    # for _, y in ae_val_loader:
+    #     y_true.extend(y.numpy())
+    # y_true = np.array(y_true)
 
     print(f"losses: {all_losses[0]}, y_true: {y_true[0]}")
     print(set(y_true))
     # ROC curve
+
+    # order scores
+    # order = np.argsort(all_losses)
+    # all_losses = all_losses[order]
+    # y_true = y_true[order]
 
     fpr, tpr, thresholds = roc_curve(y_true, all_losses)
     roc_auc = auc(fpr, tpr)
@@ -400,7 +411,9 @@ plt.legend()
 plt.show()
 
 
-#TODO: 
-# Hacer aquí un training simple de los tres models con pocas imagenes para probar el evaluation
-# Acabar el evaluation con lo de la ROC curve y threshols y tal (todo esta en el chatgpt) 
-# ? Tengo que evitar tambien que se cojan imagenes con presence = 0, porque esto es que no estan anotados. Mirar primero si hay presencia 0.0
+#TODO:
+#! Algo esta mal porque las ROC curves me salen difernte en cada repeticion, cosa que no tendria que pasar 
+# ? Ordenar el valor de los losses para que la ROC curve este bien
+# Hacer un k-fold stratified con shuffle = false para la validacion usaar sk-learn
+# Hacer box plots para la k-fold
+# Hacer las ROC curves conRED channel
