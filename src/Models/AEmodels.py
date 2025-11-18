@@ -210,7 +210,16 @@ class VAECNN(nn.Module):
        
     def representation(self, x):
         # Sanity check for h_dim dimension
-        if (self.encoder_mu.in_features!=x.shape[-1]):
+        assert x.shape[-1] == self.encoder_mu.in_features, \
+            f"h_dim mismatch: got {x.shape[-1]}, expected {self.encoder_mu.in_features}"
+
+        mu = self.encoder_mu(x)
+        logvar = self.encoder_logvar(x)
+        z = self.reparameterize(mu, logvar)
+        z = self.zRep(z)
+        return z, mu, logvar
+
+    """     if (self.encoder_mu.in_features!=x.shape[-1]):
             self.encoder_mu.in_features=x.shape[-1]
             self.encoder_mu.encoder_logvar=x.shape[-1]
             self.zRep.out_features=x.shape[-1]
@@ -218,6 +227,7 @@ class VAECNN(nn.Module):
         z = self.zRep(self.reparameterize(mu, logvar))
         
         return z, mu, logvar
+    """
 
     def forward(self, x: Tensor) -> Tensor:
         
