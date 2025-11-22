@@ -212,7 +212,7 @@ data/
 
 #wandb
 src/wandb
-src/wndb_runs
+src/wandb_runs
 
 #models
 src/checkpoints

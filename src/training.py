@@ -39,6 +39,7 @@ import numpy as np
 import pandas as pd
 import glob
 from PIL import Image
+from tqdm import tqdm
 
 # Torch Libraries
 from torch.utils.data import DataLoader
@@ -241,6 +242,7 @@ def LoadCropped(list_folders, n_images_per_folder=None, excelFile=None, resize=N
         print(f"[LoadCropped] Loaded {len(images)} images from {len(metadata['PatID'].unique())} healthy patients.")
     return Ims, metadata
 
+
 def LoadAnnotated(list_folders, n_images_per_folder=None, excelFile=None, resize=None, verbose=False):
     """
     Load annotated patches (presence of H. pylori known), optionally resizing images.
@@ -355,11 +357,11 @@ inputmodule_paramsEnc['num_input_channels']=3
 
 # 0.1 NETWORK TRAINING PARAMS
 AE_params = {
-    'epochs': 100,
-    'batch_size': 256,
+    'epochs': 30,
+    'batch_size': 2048,
     'lr': 1e-3,
     'weight_decay': 1e-5,
-    'img_size': (128,128),   
+    'img_size': (256,256),   
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
 }
 
@@ -371,12 +373,13 @@ df_diag = pd.read_csv(PATIENT_DIAGNOSIS_FILE) if os.path.isfile(PATIENT_DIAGNOSI
 
 # 1.2 Patches Data
 
-annotated_folders = get_all_subfolders(ANNOTATED_PATCHES_DIR)
 crossval_cropped_folders = get_all_subfolders(CROPPED_PATCHES_DIR)
 
+print("Loading images")
+
 ae_train_ims, ae_train_meta = LoadCropped(
-    crossval_cropped_folders, n_images_per_folder=3, 
-    excelFile=PATIENT_DIAGNOSIS_FILE, resize=AE_params['img_size']
+    crossval_cropped_folders, n_images_per_folder=500, 
+    excelFile=PATIENT_DIAGNOSIS_FILE, resize=AE_params['img_size'], verbose=True
 )
 
 
@@ -384,18 +387,20 @@ ae_train_ims, ae_train_meta = LoadCropped(
 def _to_dataset(ims, meta, with_labels=False):
     X = np.stack([im.transpose(2,0,1) for im in ims], axis=0) / 255.0 
     if with_labels:
-        y = np.array([m['Presence'] for m in meta], dtype=np.int64)
+        y = meta['Presence'].to_numpy(dtype=np.int64) 
         return Standard_Dataset(X, y)
     else:
         return Standard_Dataset(X)
 
+print("dataset")
 ae_train_ds = _to_dataset(ae_train_ims, ae_train_meta, with_labels=False)
-ae_train_loader = DataLoader(ae_train_ds, batch_size=AE_params['batch_size'], shuffle=True)
+print("dataloader")
+ae_train_loader = DataLoader(ae_train_ds, batch_size=AE_params['batch_size'], num_workers=4, shuffle=True)
 
 ### 4. AE TRAINING
 
 configs_to_run = ['1', '2', '3']
-
+print(AE_params['device'])
 for Config in configs_to_run:
     print(f"\n===== Training AE with CONFIG {Config} =====")
 
@@ -426,12 +431,13 @@ for Config in configs_to_run:
     # Optimizer and loss
     optimizer = optim.Adam(model.parameters(), lr=config_wandb.lr, weight_decay=config_wandb.weight_decay)
     criterion = nn.MSELoss()
+    
 
     # Training loop
     model.train()
     for epoch in range(config_wandb.epochs):
         epoch_loss = 0.0
-        for batch in ae_train_loader:
+        for batch in tqdm(ae_train_loader, desc=f"Epoch {epoch+1}/{config_wandb.epochs}"):
             x = batch.to(torch.float32).to(AE_params['device'])
             optimizer.zero_grad()
             recon = model(x)
@@ -453,13 +459,8 @@ for Config in configs_to_run:
     print(f"Saved model for Config {Config} at {checkpoint_path}")
 
     # Free GPU memory after each config
-    # del model, optimizer, criterion
-    # torch.cuda.empty_cache()
-    # gc.collect()
+    del model, optimizer, criterion
+    torch.cuda.empty_cache()
+    gc.collect()
 
-    # wandb.finish()
-
-
-#TODO: 
-# Hacer aquí un training simple de los tres models con pocas imagenes para probar el evaluation
-# Acabar el evaluation con lo de la ROC curve y threshols y tal (todo esta en el chatgpt) 
+    wandb.finish()

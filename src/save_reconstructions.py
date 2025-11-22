@@ -1,39 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Wed Apr 10 16:14:32 2024
-
-Example of Main Steps for the Detection of HPilory using AutoEncoders for
-the detection of anomalous pathological staining
-
-Guides:
-    0. Implement 2 functions for Loading Windows and metadata:
-        0.1 LoadCropped to load a list of images from the Cropped folder
-            inputs: list of folders containing the images, number of images to load for each folder,
-                    ExcelFile with metadata
-            out: Ims: list of images
-                 metadata: list/array of information for each image in Ims
-                           (PatID, imfilename)
-        0.1 LoadAnnotated to load a list of images from the Annotated folder
-            inputs: list of folders containing the images, number of images to load for each folder,
-                    ExcelFile with metadata
-            out: Ims: list of images
-                 metadata: list/array of information for each image in Ims
-                           (PatID, imfilename,presenceHelico)
-                           
-    1. Split Code into train and test steps 
-    2. Save trainned models and any intermediate result input of the next step
-    
-@authors: debora gil, pau cano
-email: debora@cvc.uab.es, pcano@cvc.uab.es
-Reference: https://arxiv.org/abs/2309.16053 
-
-"""
-# IO Libraries
-import sys
-import os
-import pickle
-from pathlib import Path
-
 # Standard Libraries
 import numpy as np
 import pandas as pd
@@ -55,8 +19,9 @@ from Models.AEmodels import AutoEncoderCNN
 from Models.datasets import Standard_Dataset
 
 
-from config import CROPPED_PATCHES_DIR, ANNOTATED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE, ANNOTATED_METADATA_FILE
+from config import CROPPED_PATCHES_DIR, ANNOTATED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE, ANNOTATED_METADATA_FILE, RECON_DIR
 
+from tqdm import tqdm
 import wandb
 import os
 
@@ -310,113 +275,85 @@ def _to_dataset(ims, meta, with_labels=False):
 ae_val_ds = _to_dataset(ae_val_ims, ae_val_meta, with_labels=True)
 ae_val_loader = DataLoader(ae_val_ds, batch_size=AE_params['batch_size'], shuffle=False)
 
-# Evaluation:
-
 inputmodule_paramsEnc = {'num_input_channels': 3} 
-configs_to_run = ['1', '2', '3']
+configs_to_run = ['1'] # , '2', '3'
 
 checkpoint_paths = [f'checkpoints/AE_Config{c}.pth' for c in configs_to_run]
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # --- 1. Load Models into a List ---
 loaded_models = []
-model_configs = [] # To keep track of which config belongs to which model
-ae_losses_dict = {}
-
-y_true_list = []
-for _, y in ae_val_loader:
-    y_true_list.extend(y.numpy())
-y_true = np.array(y_true_list)
-
 for config_id, path in zip(configs_to_run, checkpoint_paths):
-    print(f"Loading model for Config {config_id} from {path}...")
-    
-    # 1. Instantiate the correct architecture for this config
+    if not os.path.exists(path):
+        print(f"[Warning] checkpoint not found: {path} -- skipping config {config_id}")
+        continue
+    print(f"[Load] Config {config_id} from {path}")
     net_paramsEnc, net_paramsDec, inputmodule_paramsDec = AEConfigs(config_id)
-    
-    model = AutoEncoderCNN(
-        inputmodule_paramsEnc, net_paramsEnc,
-        inputmodule_paramsDec, net_paramsDec
-    )
-
-    model.load_state_dict(torch.load(path, map_location=device))
+    model = AutoEncoderCNN(inputmodule_paramsEnc, net_paramsEnc, inputmodule_paramsDec, net_paramsDec)
+    # map_location device ensures compatibility
+    state = torch.load(path, map_location=device)
+    model.load_state_dict(state)
     model.to(device)
-    model.eval() # Set to evaluation mode (important for inference/evaluation)
-    
-    loaded_models.append(model)
-    model_configs.append(config_id)
-    print(f"Successfully loaded Config {config_id}.")
+    model.eval()
+    loaded_models.append((config_id, model))
 
+if len(loaded_models) == 0:
+    raise RuntimeError("No models loaded. Checkpoint files missing.")
 
-    all_losses = []
+# We'll iterate once through the validation loader and for every model save reconstructions.
+# Because DataLoader shuffle=False and dataset order matches ae_val_meta, we can map by global index.
+global_idx = 0  # tracks absolute index in the dataset
+total_samples = len(ae_val_ds)
 
-    with torch.no_grad():
-        for batch in ae_val_loader:  # validation DataLoader
-            x = batch[0].to(torch.float32).to(AE_params['device'])  # assuming batch = (X,) or (X, y)
-            recon = model(x)
-            # Compute per-sample MSE
-            batch_losses = ((x - recon)**2).mean(dim=[1,2,3])  # MSE per image
-            all_losses.extend(batch_losses.cpu().numpy())
+# For nicer progress bar:
+pbar = tqdm(total=total_samples, desc="Saving reconstructions")
 
-    all_losses = np.array(all_losses)
-    ae_losses_dict[path] = all_losses
+with torch.no_grad():
+    for batch in ae_val_loader:
+        # Standard_Dataset probably yields either x or (x, y) depending on implementation
+        if isinstance(batch, (list, tuple)):
+            x_batch = batch[0]
+        else:
+            x_batch = batch
+        # ensure tensor on correct device and dtype
+        x_batch = x_batch.to(dtype=torch.float32, device=device)
 
-    # y_true = []
-    # for _, y in ae_val_loader:
-    #     y_true.extend(y.numpy())
-    # y_true = np.array(y_true)
+        batch_size = x_batch.shape[0]
 
-    print(f"losses: {all_losses[0]}, y_true: {y_true[0]}")
-    print(set(y_true))
-    # ROC curve
+        # For each model produce recon and save
+        for config_id, model in loaded_models:
+            recon_batch = model(x_batch)  # (B, C, H, W)
+            # Move to cpu and clamp
+            recon_batch = recon_batch.detach().cpu().clamp(0.0, 1.0)
 
-    # order scores
-    # order = np.argsort(all_losses)
-    # all_losses = all_losses[order]
-    # y_true = y_true[order]
+            # Save each image individually mapping to meta
+            for i in range(batch_size):
+                idx = global_idx + i
+                if idx >= len(ae_val_meta):
+                    # safety guard
+                    continue
+                row = ae_val_meta.iloc[idx]
+                patid = str(row['PatID'])
+                filename = str(row['imfilename'])
 
-    fpr, tpr, thresholds = roc_curve(y_true, all_losses)
-    roc_auc = auc(fpr, tpr)
+                # create patient dir under RECON_DIR (optionally include config id subdir)
+                out_dir = os.path.join(RECON_DIR, f"Config{config_id}", patid)
+                os.makedirs(out_dir, exist_ok=True)
 
-    plt.figure(figsize=(6,6))
-    plt.plot(fpr, tpr, label=f'ROC curve (AUC = {roc_auc:.3f})')
-    plt.plot([0,1], [0,1], 'k--')  # diagonal
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title('ROC Curve for AE Reconstruction')
-    plt.legend()
-    plt.show()
+                # convert to HWC uint8
+                img_tensor = recon_batch[i]  # (C, H, W)
+                img_np = (img_tensor.numpy().transpose(1,2,0) * 255.0).round().astype('uint8')  # (H,W,C)
 
+                # Save with same filename
+                out_path = os.path.join(out_dir, filename)
+                try:
+                    pil = Image.fromarray(img_np)
+                    pil.save(out_path)
+                except Exception as e:
+                    print(f"[Save Error] idx {idx} file {out_path}: {e}")
 
-    #Decide threshold
-    # Option 1: You can pick threshold at maximum Youden’s J statistic
-    J = tpr - fpr
-    idx = np.argmax(J)
-    best_threshold = thresholds[idx]
-    print("Best threshold:", best_threshold)
+        global_idx += batch_size
+        pbar.update(batch_size)
 
-    # Apply threshold
-    y_pred = (all_losses > best_threshold).astype(int)
-
-
-# Compare multiple AEs
-plt.figure(figsize=(6,6))
-for ae_name, losses in ae_losses_dict.items():
-    fpr, tpr, _ = roc_curve(y_true, losses)
-    plt.plot(fpr, tpr, label=f'{ae_name} (AUC={auc(fpr, tpr):.3f})')
-plt.plot([0,1],[0,1],'k--')
-plt.xlabel('FPR')
-plt.ylabel('TPR')
-plt.legend()
-plt.show()
-
-
-#TODO:
-#! Algo esta mal porque las ROC curves me salen difernte en cada repeticion, cosa que no tendria que pasar 
-# ? Ordenar el valor de los losses para que la ROC curve este bien
-# Hacer un k-fold stratified con shuffle = false para la validacion usaar sk-learn
-# Hacer box plots para la k-fold
-# Hacer las ROC curves conRED channel
-
-#? Config 3 seems to be the best one. train with different hyperparams to see if it improves
-#? Puede que el image size esté afectando. probar diferentes metricas y bajar el numero de imagenes por paciente
+pbar.close()
+print("All reconstructions saved to:", RECON_DIR)
