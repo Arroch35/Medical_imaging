@@ -25,7 +25,7 @@ import json
 
 
 ## Own Functions
-from Models.AEmodels import VAECNN, Encoder
+from Models.VAEmodels import VAECNN, Encoder
 from Models.datasets import Standard_Dataset
 from utils import LoadAnnotated, get_all_subfolders
 from config import CROPPED_PATCHES_DIR, ANNOTATED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE, ANNOTATED_METADATA_FILE
@@ -72,10 +72,10 @@ inputmodule_paramsEnc['num_input_channels']=3
 # 0.1 NETWORK TRAINING PARAMS
 VAE_params = {
     'epochs': 25,
-    'batch_size': 64,
+    'batch_size': 256,
     'lr': 1e-3,
     'weight_decay': 1e-5,
-    'img_size': (128,128),   
+    'img_size': (256,256),
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
 }
 
@@ -84,26 +84,19 @@ VAE_params = {
 #### 1. LOAD DATA: Implement
 
 # 1.1 Patient Diagnosis
-#### 2. DATA SPLITING INTO INDEPENDENT SETS
-
-# 2.0 Annotated set for FRed optimal threshold
-# later
-# 2.1 AE trainnig set
-
-# 2.1 Diagosis crossvalidation set
-
-#### 3. lOAD PATCHES
-
 df_diag = pd.read_csv(PATIENT_DIAGNOSIS_FILE) if os.path.isfile(PATIENT_DIAGNOSIS_FILE) else None
-
 
 # 1.2 Patches Data
 annotated_folders = get_all_subfolders(ANNOTATED_PATCHES_DIR)
 
 vae_val_ims, vae_val_meta = LoadAnnotated(
-    annotated_folders, patient_excel=PATIENT_DIAGNOSIS_FILE,n_images_per_folder=1, 
+    annotated_folders, patient_excel=PATIENT_DIAGNOSIS_FILE,n_images_per_folder=None,
     excelFile=ANNOTATED_METADATA_FILE, resize=VAE_params['img_size'], verbose=True
 )
+
+# check the dtype of vae_val_meta
+print(f'dtype of vae_val_meta: {type(vae_val_meta)}')
+print(f"Metadata 'Presence' column dtype: {vae_val_meta['Presence'].dtype}")
 
 #### 3. lOAD PATCHES
 def _to_dataset(ims, meta, with_labels=False):
@@ -115,7 +108,7 @@ def _to_dataset(ims, meta, with_labels=False):
         return Standard_Dataset(X)
 
 vae_val_ds = _to_dataset(vae_val_ims, vae_val_meta, with_labels=True)
-vae_val_loader = DataLoader(vae_val_ds, batch_size=VAE_params['batch_size'], shuffle=True)
+vae_val_loader = DataLoader(vae_val_ds, batch_size=VAE_params['batch_size'], shuffle=False)
 
 inputmodule_paramsEnc = {'num_input_channels': 3}
 configs_to_run = ['1', '2', '3']
@@ -128,11 +121,17 @@ loaded_models = []
 model_configs = [] # To keep track of which config belongs to which model
 vae_losses_dict = {}
 
+y_true = []
+for _, y in vae_val_loader:
+    y_true.extend(y.numpy())
+y_true = np.array(y_true)
+
 for config_id, path in zip(configs_to_run, checkpoint_paths):
     print(f"Loading model for Config {config_id} from {path}...")
     
     # determine h_dim by passing a dummy input through the encoder
     net_paramsEnc, net_paramsDec, inputmodule_paramsDec = VAEConfigs(config_id)
+
     tmp_encoder = Encoder(inputmodule_paramsEnc, net_paramsEnc)
     tmp_encoder.eval()
 
@@ -150,7 +149,7 @@ for config_id, path in zip(configs_to_run, checkpoint_paths):
     # define the parameters for the bottleneck representation
     net_paramsRep = {
         'h_dim': h_dim,
-        'z_dim': 16,
+        'z_dim': 32,
     }
 
     model = VAECNN(inputmodule_paramsEnc, net_paramsEnc,
@@ -182,10 +181,8 @@ for config_id, path in zip(configs_to_run, checkpoint_paths):
     all_losses = np.array(all_losses)
     vae_losses_dict[path] = all_losses
 
-    y_true = []
-    for _, y in vae_val_loader:
-        y_true.extend(y.numpy())
-    y_true = np.array(y_true)
+    print(f"losses: {all_losses[0]}, y_true: {y_true[0]}")
+    print(set(y_true))
 
     # ROC curve
     fpr, tpr, thresholds = roc_curve(y_true, all_losses)
@@ -200,7 +197,6 @@ for config_id, path in zip(configs_to_run, checkpoint_paths):
     plt.legend()
     plt.show()
 
-
     #Decide threshold
     J = tpr - fpr
     idx = np.argmax(J)
@@ -210,8 +206,7 @@ for config_id, path in zip(configs_to_run, checkpoint_paths):
     # Apply threshold
     y_pred = (all_losses > best_threshold).astype(int)
 
-
-# Compare multiple AEs
+# Compare multiple AEs and save the plot
 plt.figure(figsize=(6,6))
 for ae_name, losses in vae_losses_dict.items():
     fpr, tpr, _ = roc_curve(y_true, losses)

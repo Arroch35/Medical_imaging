@@ -4,7 +4,6 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
-
 def _read_metadata_excel(excel_path):
     """
     Read an excel metadata file and return a DataFrame.

@@ -28,10 +28,10 @@ import json
 
 
 ## Own Functions
-from Models.AEmodels import VAECNN, Encoder
+from Models.VAEmodels import VAECNN, Encoder
 from Models.datasets import Standard_Dataset
 from utils import *
-from config import CROPPED_PATCHES_DIR, ANNOTATED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE, ANNOTATED_METADATA_FILE
+from config2 import CROPPED_PATCHES_DIR, ANNOTATED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE, ANNOTATED_METADATA_FILE
 
 
 def AEConfigs(Config):
@@ -82,11 +82,11 @@ inputmodule_paramsEnc['num_input_channels']=3
 
 # 0.1 NETWORK TRAINING PARAMS
 VAE_params = {
-    'epochs': 25,
+    'epochs': 50,
     'batch_size': 256,
     'lr': 1e-3,
     'weight_decay': 1e-5,
-    'img_size': (128,128),   
+    'img_size': (256,256),
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
 }
 
@@ -98,7 +98,7 @@ VAE_params = {
 crossval_cropped_folders = get_all_subfolders(CROPPED_PATCHES_DIR)
 
 ae_train_ims, ae_train_meta = LoadCropped(
-    crossval_cropped_folders, n_images_per_folder=3,
+    crossval_cropped_folders, n_images_per_folder=250,
     excelFile=PATIENT_DIAGNOSIS_FILE, resize=VAE_params['img_size']
 )
 
@@ -136,12 +136,7 @@ def _to_dataset(ims, meta, with_labels=False):
         return Standard_Dataset(X)
 
 ae_train_ds = _to_dataset(ae_train_ims, ae_train_meta, with_labels=False)
-ae_train_loader = DataLoader(ae_train_ds, batch_size=VAE_params['batch_size'], shuffle=True)
-
-# ann_ds = _to_dataset(ann_ims, ann_meta, with_labels=True)
-
-# ann_loader = DataLoader(ann_ds, batch_size=VAE_params['batch_size'], 
-#                         shuffle=False, num_workers=2)
+ae_train_loader = DataLoader(ae_train_ds, batch_size=VAE_params['batch_size'], num_workers=4, shuffle=True)
 
 ### 4. AE TRAINING
 
@@ -153,7 +148,7 @@ ae_train_loader = DataLoader(ae_train_ds, batch_size=VAE_params['batch_size'], s
 # 4.1 Data Split
 
 ###### CONFIG1
-Config='3'
+Config='1'
 net_paramsEnc, net_paramsDec, inputmodule_paramsDec=AEConfigs(Config)
 
 tmp_encoder = Encoder(inputmodule_paramsEnc, net_paramsEnc)
@@ -172,7 +167,7 @@ with torch.no_grad():
 # define the parameters for the bottleneck representation
 net_paramsRep = {
     'h_dim': h_dim,
-    'z_dim': 16,  
+    'z_dim': 32,
 }
 
 model=VAECNN(inputmodule_paramsEnc, net_paramsEnc, 
@@ -183,9 +178,12 @@ model=VAECNN(inputmodule_paramsEnc, net_paramsEnc,
 optimizer = optim.Adam(model.parameters(), lr=VAE_params['lr'], weight_decay=VAE_params['weight_decay'])
 criterion = nn.MSELoss(reduction='mean')
 
-beta = 2.0
- 
-# KL for element and then the mean over batch 
+beta_start = 0.0
+beta_end = 1.0
+warmup_epochs = 20
+
+
+# KL for element and then the mean over batch
 def kl_loss(mu, logvar):
     kld_per_sample = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
     return torch.mean(kld_per_sample)
@@ -197,15 +195,17 @@ def recon_loss_fn(x_recon, x):
     recon_loss = F.mse_loss(x_recon, x, reduction='sum') / (x.size(0) * num_pixels)
     return recon_loss
 
-
 model.train()
 for epoch in range(VAE_params['epochs']):
     epoch_loss = 0.0 # total loss
     epoch_recon = 0.0 # reconstruction loss
     epoch_kl = 0.0 # KL divergence loss
 
+    beta = min(beta_end,
+               beta_start + (epoch / warmup_epochs) * (beta_end - beta_start))
+
     for batch in ae_train_loader:
-        x = batch.to(VAE_params['device']).to(torch.float32)  
+        x = batch.to(VAE_params['device']).to(torch.float32)
         #print("Shape after dataloader: "+str(x.shape))
         optimizer.zero_grad()
 
@@ -235,7 +235,7 @@ for epoch in range(VAE_params['epochs']):
 
 
 Path('checkpoints').mkdir(exist_ok=True)
-torch.save(model.state_dict(), 'checkpoints/VAE_System3.pth') # save model
+torch.save(model.state_dict(), 'checkpoints/VAE_System1.pth') # save model
 
 # Free GPU Memory After Training
 gc.collect()
