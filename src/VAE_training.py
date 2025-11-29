@@ -92,14 +92,14 @@ inputmodule_paramsEnc['num_input_channels']=3
 
 # 0.1 NETWORK TRAINING PARAMS
 VAE_params = {
-    'epochs': 10,
+    'epochs': 50,
     'batch_size': 64,
     'lr': 1e-3,
     'weight_decay': 1e-5,
     'img_size': (128,128),
     'beta_start': 0.0,
-    'beta_end': 4.0,
-    'warmup_epochs': 20,
+    'beta_max': 1.0,
+    'beta_warmup_epochs': 40,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
 }
 
@@ -108,15 +108,13 @@ VAE_params = {
 #### 1. LOAD DATA: Implement
 
 # 1.1 Patient Diagnosis
-crossval_cropped_folders = get_all_subfolders(CROPPED_PATCHES_DIR)
-
-ae_train_ims, ae_train_meta = LoadCropped(
+vae_train_ims, vae_train_meta = LoadCropped(
     crossval_cropped_folders, n_images_per_folder=30,
     excelFile=PATIENT_DIAGNOSIS_FILE, resize=VAE_params['img_size']
 )
 
-print("Cropped loaded:", ae_train_ims.shape, ae_train_meta.shape)
-print(ae_train_meta.head())
+print("Cropped loaded:", vae_train_ims.shape, vae_train_meta.shape)
+print(vae_train_meta.head())
 
 # Annotated para aprender umbral de error (ROC)
 """ann_ims, ann_meta = LoadAnnotated(
@@ -126,8 +124,6 @@ print(ae_train_meta.head())
 print("Annotated loaded:", ann_ims.shape, ann_meta.shape)
 print(ann_meta.head())
 """
-
-print(f"Found {len(crossval_cropped_folders)} cropped folders and {len(annotated_folders)} annotated folders.")
 #### 2. DATA SPLITING INTO INDEPENDENT SETS
 
 # 2.0 Annotated set for FRed optimal threshold
@@ -142,13 +138,13 @@ print(f"Found {len(crossval_cropped_folders)} cropped folders and {len(annotated
 def _to_dataset(ims, meta, with_labels=False):
     X = np.stack([im.transpose(2, 0, 1) for im in ims], axis=0).astype(np.float32) / 255.0
     if with_labels:
-        y = np.array([m['Presence'] for m in meta], dtype=np.int64)
+        y = meta['Presence'].to_numpy(dtype=np.int64)
         return Standard_Dataset(X, y)
     else:
         return Standard_Dataset(X)
 
-ae_train_ds = _to_dataset(ae_train_ims, ae_train_meta, with_labels=False)
-ae_train_loader = DataLoader(ae_train_ds, batch_size=VAE_params['batch_size'],
+vae_train_ds = _to_dataset(vae_train_ims, vae_train_meta, with_labels=False)
+vae_train_loader = DataLoader(vae_train_ds, batch_size=VAE_params['batch_size'],
                              shuffle=True)
 
 
@@ -179,6 +175,11 @@ optimizer = optim.Adam(
 def kl_loss(mu, logvar):
     return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
 
+loss_history = {
+    "recon": [],
+    "kld": [],
+    "total": [],
+}
 
 # 4. Training loop
 model.train()
@@ -186,10 +187,10 @@ for epoch in range(VAE_params["epochs"]):
     epoch_recon_loss = 0.0
     epoch_kld_loss   = 0.0
     epoch_total_loss = 0.0
-    beta = min(VAE_params["beta_end"],
-               VAE_params["beta_start"] + (epoch / VAE_params["warmup_epochs"]) * (VAE_params["beta_end"] - VAE_params["beta_start"]))
+    beta_step = (VAE_params["beta_max"] - VAE_params["beta_start"]) / max(1, VAE_params["beta_warmup_epochs"])
+    beta_t = min(VAE_params["beta_max"], VAE_params["beta_start"] + epoch * beta_step)
 
-    for batch in ae_train_loader:
+    for batch in vae_train_loader:
         x = batch.to(torch.float32).to(VAE_params["device"])
 
         optimizer.zero_grad()
@@ -198,14 +199,14 @@ for epoch in range(VAE_params["epochs"]):
         recon, mu, logvar = model(x)
 
         # Reconstruction loss (MSE)
-        recon_loss = F.mse_loss(recon, x, reduction="mean")
+        recon_loss = F.mse_loss(recon, x, reduction="sum") / x.size(0)
 
         # KLD
         kld_per_sample = kl_loss(mu, logvar)
         kld_loss = kld_per_sample.mean()
 
         # Total loss
-        total_loss = recon_loss + beta * kld_loss
+        total_loss = recon_loss + beta_t * kld_loss
 
         # Backprop
         total_loss.backward()
@@ -218,10 +219,15 @@ for epoch in range(VAE_params["epochs"]):
         epoch_total_loss += total_loss.item() * bs
 
     # Normalize by dataset size
-    N = len(ae_train_ds)
+    N = len(vae_train_ds)
     epoch_recon_loss /= N
     epoch_kld_loss   /= N
     epoch_total_loss /= N
+
+    loss_history["recon"].append(epoch_recon_loss)
+    loss_history["kld"].append(epoch_kld_loss)
+    loss_history["total"].append(epoch_total_loss)
+
 
     # Print epoch summary
     print(
@@ -233,8 +239,25 @@ for epoch in range(VAE_params["epochs"]):
 
 # 5. Save model
 Path('checkpoints').mkdir(exist_ok=True)
-torch.save(model.state_dict(), 'checkpoints/VAE_System3.pth') # save model
 
+save_dict = {
+    "state_dict": model.state_dict(),
+    "config": {
+        "VAE_params": VAE_params,
+        "net_paramsEnc": net_paramsEnc,
+        "net_paramsDec": net_paramsDec,
+        "inputmodule_paramsEnc": inputmodule_paramsEnc,
+        "inputmodule_paramsDec": inputmodule_paramsDec,
+        "net_paramsRep": net_paramsRep,
+        "config_id": Config
+    },
+    "epoch": VAE_params["epochs"],
+    "loss_history": loss_history,      # store recon + KL per epoch
+    "scaler_stats": None,              # if you later add normalization
+    "train_meta": vae_train_meta,      # optional: metadata snapshot
+}
+torch.save(save_dict, "checkpoints/VAE_System1.pth")
+print(f'Saved VAE config {Config} checkpoint to checkpoints/VAE_System1.pth')
 # 6. Cleanup
 del model, optimizer
 torch.cuda.empty_cache()
