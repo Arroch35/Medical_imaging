@@ -14,14 +14,13 @@ import torch.nn as nn
 import torch.optim as optim
 
 # Own Functions
-from Models.VAEmodels import AutoEncoderCNN
+from Models.AEmodels import VAECNN, Encoder
 from Models.datasets import Standard_Dataset
 
-from config2 import CROPPED_PATCHES_DIR, ANNOTATED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE, ANNOTATED_METADATA_FILE, \
-    RECON_DIR
-
+from config2 import CROPPED_PATCHES_DIR, ANNOTATED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE, ANNOTATED_METADATA_FILE, RECON_DIR
+from utils import *
 from tqdm import tqdm
-import wandb
+# import wandb
 import os
 
 
@@ -59,198 +58,17 @@ def AEConfigs(Config):
     return net_paramsEnc, net_paramsDec, inputmodule_paramsDec
 
 
-def _read_metadata_excel(excel_path):
-    """
-    Read an excel metadata file and return a DataFrame.
-    If excel_path is None or doesn't exist -> returns empty DataFrame.
-    """
-    if excel_path is None:
-        return pd.DataFrame()
-    if not os.path.exists(excel_path):
-        print(f"[Warning] Metadata file not found: {excel_path}")
-        return pd.DataFrame()
-    try:
-        df = pd.read_excel(excel_path)
-    except Exception:
-        # Try CSV fallback
-        try:
-            df = pd.read_csv(excel_path)
-        except Exception:
-            print(f"[Warning] Could not read metadata file: {excel_path}")
-            return pd.DataFrame()
-    # Normalize column names (strip spaces)
-    df.columns = [c.strip() for c in df.columns]
-    return df
-
-
-def _window_id_from_filename(fname):
-    """
-    Normalize a filename to a Window_ID style used in excel:
-    strips extension and returns base name.
-    """
-    base = os.path.basename(fname)
-    name, _ = os.path.splitext(base)
-    return name
-
-
-def LoadAnnotated(list_folders, patient_excel, n_images_per_folder=None, excelFile=None, resize=None, verbose=False):
-    """
-    Load annotated patches for patients with **non-negative diagnosis**, and compute the percentage.
-
-    Parameters
-    ----------
-    list_folders : list
-        Paths containing annotated .png patches
-    patient_excel : str
-        Excel/CSV file with patient diagnoses (columns: 'CODI', 'DENSITAT')
-    n_images_per_folder : int or None
-        Limit number of patches per folder (first N if provided)
-    excelFile : str or None
-        Metadata Excel with 'Pat_ID', 'Window_ID', 'Presence' columns
-    resize : tuple(int,int) or None
-        Target image size (H, W). If None, keep original 256x256.
-    verbose : bool
-        Print progress messages if True
-
-    Returns
-    -------
-    Ims : np.ndarray
-        Images as (N, H, W, 3) array, dtype=uint8
-    metadata : pd.DataFrame
-        DataFrame with columns ['PatID', 'imfilename', 'Presence']
-    """
-    # Load patient diagnosis file
-    if not os.path.exists(patient_excel):
-        raise FileNotFoundError(f"[LoadAnnotatedPositivePatients] Patient file not found: {patient_excel}")
-
-    try:
-        df_patients = pd.read_csv(patient_excel)
-    except Exception:
-        df_patients = pd.read_excel(patient_excel)
-
-    df_patients.columns = [c.strip().upper() for c in df_patients.columns]
-    if not {"CODI", "DENSITAT"}.issubset(df_patients.columns):
-        raise ValueError("Patient file must contain columns: 'CODI' and 'DENSITAT'")
-
-    # Keep only non-negative patients
-    non_negative_pats = set(
-        df_patients.loc[df_patients['DENSITAT'].str.upper().str.strip() != "NEGATIVA", "CODI"].astype(str))
-
-    # Track all patients in the folders
-    all_patients = set()
-    for folder in list_folders:
-        folder_name = os.path.basename(os.path.normpath(folder))
-        patid = folder_name.split("_")[0] if "_" in folder_name else folder_name
-        all_patients.add(patid)
-
-    # Compute percentage
-    total_patients = len(all_patients)
-    non_negative_count = len([p for p in all_patients if p in non_negative_pats])
-    perc_non_negative = 100 * non_negative_count / total_patients if total_patients > 0 else 0.0
-    if verbose:
-        print(f"[LoadAnnotated] Total patients found: {total_patients}")
-        print(f"[LoadAnnotated] Non-negative patients: {non_negative_count} ({perc_non_negative:.2f}%)")
-
-    # Load annotation metadata
-    df = _read_metadata_excel(excelFile)
-    records = []
-    images = []
-
-    for folder in list_folders:
-        if not os.path.isdir(folder):
-            if verbose:
-                print(f"[LoadAnnotated] folder not found, skipping: {folder}")
-            continue
-
-        folder_name = os.path.basename(os.path.normpath(folder))
-        patid = folder_name.split("_")[0] if "_" in folder_name else folder_name
-
-        # # Skip if patient is negative
-        # if patid not in non_negative_pats:
-        #     continue
-
-        files = sorted(glob.glob(os.path.join(folder, "*.png")))
-        if n_images_per_folder is not None:
-            files = files[:n_images_per_folder]
-
-        for fpath in files:
-            try:
-                im = Image.open(fpath).convert("RGB")
-                if resize is not None:
-                    im = im.resize(resize, Image.BILINEAR)
-                arr = np.asarray(im, dtype=np.uint8)
-            except Exception as e:
-                if verbose:
-                    print(f"[LoadAnnotated] failed to read {fpath}: {e}")
-                continue
-
-            filename = os.path.basename(fpath)
-            window_id = _window_id_from_filename(filename)
-
-            # Get presence if excelFile is provided
-            presence_val = None
-            if df is not None and not df.empty:
-                if 'Aug' in window_id:
-                    parts = window_id.split('_')
-                    window_id_clean = f"{int(parts[0])}_{parts[1]}"
-                else:
-                    try:
-                        window_id_clean = str(int(window_id))
-                    except ValueError:
-                        window_id_clean = window_id
-
-                m = df[df['Window_ID'].astype(str).str.strip() == window_id_clean]
-                if m.empty and 'Pat_ID' in df.columns:
-                    m = df[(df['Window_ID'].astype(str).str.strip() == window_id_clean) &
-                           (df['Pat_ID'].astype(str).str.strip() == patid)]
-                if not m.empty and 'Presence' in m.columns:
-                    presence_val = m.iloc[0]['Presence']
-
-                if presence_val not in [-1, 1]:
-                    continue
-                if presence_val == -1: presence_val = 0  # ROC curve expects 0/1 values
-
-            record = {'PatID': patid, 'imfilename': filename, 'Presence': presence_val}
-            images.append(arr)
-            records.append(record)
-
-    if len(images) == 0:
-        H, W = resize if resize is not None else (256, 256)
-        Ims = np.zeros((0, H, W, 3), dtype=np.uint8)
-    else:
-        Ims = np.stack(images, axis=0).astype(np.uint8)
-
-    metadata = pd.DataFrame.from_records(records)
-    if verbose:
-        print(
-            f"[LoadAnnotated] Loaded {len(images)} images from {len(metadata['PatID'].unique())} non-negative patients.")
-    return Ims, metadata
-
-
-def get_all_subfolders(root_dir):
-    """
-    Return a sorted list of all subfolders in root_dir (recursively).
-    Each folder typically corresponds to one patient/section.
-    """
-    subfolders = []
-    for root, dirs, files in os.walk(root_dir):
-        for d in dirs:
-            subfolders.append(os.path.join(root, d))
-    subfolders = sorted(subfolders)
-    return subfolders
-
-
 # 0.1 AE PARAMETERS
 inputmodule_paramsEnc = {}
 inputmodule_paramsEnc['num_input_channels'] = 3
 
 # 0.1 NETWORK TRAINING PARAMS
-AE_params = {
-    'epochs': 1,
-    'batch_size': 256,
+VAE_params = {
+    'epochs': 20,
+    'batch_size': 128,
     'lr': 1e-3,
     'weight_decay': 1e-5,
-    'img_size': (256, 256),
+    'img_size': (256,256),
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
 }
 
@@ -261,9 +79,9 @@ df_diag = pd.read_csv(PATIENT_DIAGNOSIS_FILE) if os.path.isfile(PATIENT_DIAGNOSI
 # 1.2 Patches Data
 annotated_folders = get_all_subfolders(ANNOTATED_PATCHES_DIR)
 
-ae_val_ims, ae_val_meta = LoadAnnotated(
+vae_val_ims, vae_val_meta = LoadAnnotated(
     annotated_folders, patient_excel=PATIENT_DIAGNOSIS_FILE, n_images_per_folder=None,
-    excelFile=ANNOTATED_METADATA_FILE, resize=AE_params['img_size'], verbose=True
+    excelFile=ANNOTATED_METADATA_FILE, resize=VAE_params['img_size'], verbose=True
 )
 
 
@@ -277,13 +95,13 @@ def _to_dataset(ims, meta, with_labels=False):
         return Standard_Dataset(X)
 
 
-ae_val_ds = _to_dataset(ae_val_ims, ae_val_meta, with_labels=True)
-ae_val_loader = DataLoader(ae_val_ds, batch_size=AE_params['batch_size'], shuffle=False)
+vae_val_ds = _to_dataset(vae_val_ims, vae_val_meta, with_labels=True)
+vae_val_loader = DataLoader(vae_val_ds, batch_size=VAE_params['batch_size'], shuffle=False)
 
 inputmodule_paramsEnc = {'num_input_channels': 3}
 configs_to_run = ['1']  # , '2', '3'
 
-checkpoint_paths = [f'checkpoints/AE_Config{c}.pth' for c in configs_to_run]
+checkpoint_paths = [f'checkpoints/VAE_System{c}.pth' for c in configs_to_run]
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # --- 1. Load Models into a List ---
@@ -292,10 +110,37 @@ for config_id, path in zip(configs_to_run, checkpoint_paths):
     if not os.path.exists(path):
         print(f"[Warning] checkpoint not found: {path} -- skipping config {config_id}")
         continue
-    print(f"[Load] Config {config_id} from {path}")
+    print(f"[Load] VAE Config {config_id} from {path}")
+
     net_paramsEnc, net_paramsDec, inputmodule_paramsDec = AEConfigs(config_id)
-    model = AutoEncoderCNN(inputmodule_paramsEnc, net_paramsEnc, inputmodule_paramsDec, net_paramsDec)
-    # map_location device ensures compatibility
+
+    # --- compute h_dim exactly as in VAE_training.py ---
+    tmp_encoder = Encoder(inputmodule_paramsEnc, net_paramsEnc).to(device)
+    tmp_encoder.eval()
+    with torch.no_grad():
+        dummy = torch.zeros(
+            1,
+            inputmodule_paramsEnc['num_input_channels'],
+            VAE_params['img_size'][0],
+            VAE_params['img_size'][1],
+            device=device
+        )
+        h = tmp_encoder(dummy)
+        h_dim = h.view(1, -1).size(1)
+
+    net_paramsRep = {
+        'h_dim': h_dim,
+        'z_dim': 8,   # must match VAE_training.py
+    }
+
+    model = VAECNN(
+        inputmodule_paramsEnc,
+        net_paramsEnc,
+        inputmodule_paramsDec,
+        net_paramsDec,
+        net_paramsRep
+    )
+
     state = torch.load(path, map_location=device)
     model.load_state_dict(state)
     model.to(device)
@@ -303,18 +148,17 @@ for config_id, path in zip(configs_to_run, checkpoint_paths):
     loaded_models.append((config_id, model))
 
 if len(loaded_models) == 0:
-    raise RuntimeError("No models loaded. Checkpoint files missing.")
+    raise RuntimeError("No VAE models loaded. Checkpoint files missing or paths incorrect.")
 
 # We'll iterate once through the validation loader and for every model save reconstructions.
-# Because DataLoader shuffle=False and dataset order matches ae_val_meta, we can map by global index.
 global_idx = 0  # tracks absolute index in the dataset
-total_samples = len(ae_val_ds)
+total_samples = len(vae_val_ds)
 
 # For nicer progress bar:
 pbar = tqdm(total=total_samples, desc="Saving reconstructions")
 
 with torch.no_grad():
-    for batch in ae_val_loader:
+    for batch in vae_val_loader:
         # Standard_Dataset probably yields either x or (x, y) depending on implementation
         if isinstance(batch, (list, tuple)):
             x_batch = batch[0]
@@ -327,17 +171,16 @@ with torch.no_grad():
 
         # For each model produce recon and save
         for config_id, model in loaded_models:
-            recon_batch = model(x_batch)  # (B, C, H, W)
-            # Move to cpu and clamp
+            # VAE forward → returns recon, mu, logvar
+            recon_batch, _, _ = model(x_batch)  # (B, C, H, W)
             recon_batch = recon_batch.detach().cpu().clamp(0.0, 1.0)
 
             # Save each image individually mapping to meta
             for i in range(batch_size):
                 idx = global_idx + i
-                if idx >= len(ae_val_meta):
-                    # safety guard
+                if idx >= len(vae_val_meta):
                     continue
-                row = ae_val_meta.iloc[idx]
+                row = vae_val_meta.iloc[idx]
                 patid = str(row['PatID'])
                 filename = str(row['imfilename'])
 

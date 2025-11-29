@@ -28,48 +28,58 @@ import json
 
 
 ## Own Functions
-from Models.VAEmodels import VAECNN, Encoder
+from Models.AEmodels import VAECNN
 from Models.datasets import Standard_Dataset
 from utils import *
-from config2 import CROPPED_PATCHES_DIR, ANNOTATED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE, ANNOTATED_METADATA_FILE
+from config2 import *
+torch.backends.cudnn.benchmark = True
 
 
-def AEConfigs(Config):
-    net_paramsEnc={}
-    net_paramsDec={}
-    inputmodule_paramsDec={}
-    if Config=='1':
-        # CONFIG1
-        net_paramsEnc['block_configs']=[[32,32],[64,64]]
-        net_paramsEnc['stride']=[[1,2],[1,2]]
-        net_paramsDec['block_configs']=[[64,32],[32,inputmodule_paramsEnc['num_input_channels']]]
-        net_paramsDec['stride']=net_paramsEnc['stride']
-        inputmodule_paramsDec['num_input_channels']=net_paramsEnc['block_configs'][-1][-1]
-     
+def VAEConfigs(Config):
+    inputmodule_paramsEnc = {'dim_input': 256, 'num_input_channels': 3}
+    inputmodule_paramsDec = {'dim_input': 256}
+    dim_in = inputmodule_paramsEnc['dim_input']
 
-        
-    elif Config=='2':
-        # CONFIG 2
-        net_paramsEnc['block_configs']=[[32],[64],[128],[256]]
-        net_paramsEnc['stride']=[[2],[2],[2],[2]]
-        net_paramsDec['block_configs']=[[128],[64],[32],[inputmodule_paramsEnc['num_input_channels']]]
+    net_paramsEnc = {}
+    net_paramsDec = {}
+    net_paramsRep = {}
+
+    if Config == '1':
+        net_paramsEnc['block_configs']=[[32, 32], [64, 64], [64, 64]]
+        net_paramsEnc['stride']=[[1, 2], [1, 2], [1, 2]]
+        net_paramsDec['block_configs']=[[64, 64], [64, 32], [32, inputmodule_paramsEnc['num_input_channels']]]
         net_paramsDec['stride']=net_paramsEnc['stride']
-        inputmodule_paramsDec['num_input_channels']=net_paramsEnc['block_configs'][-1][-1]
-   
-        
-    elif Config=='3':  
-        # CONFIG3
-        net_paramsEnc['block_configs']=[[32],[64],[64]]
-        net_paramsEnc['stride']=[[1],[2],[2]]
-        net_paramsDec['block_configs']=[[64],[32],[inputmodule_paramsEnc['num_input_channels']]]
+        inputmodule_paramsDec['num_input_channels']=net_paramsDec['block_configs'][0][0]
+
+        net_paramsRep['h_dim']=16384
+        net_paramsRep['z_dim']=256
+
+    elif Config == '2':
+        net_paramsEnc['block_configs']=[[32], [64], [128], [256]]
+        net_paramsEnc['stride']=[[2], [2], [2], [2]]
+        net_paramsDec['block_configs']=[[256], [128], [64], [inputmodule_paramsEnc['num_input_channels']]]
         net_paramsDec['stride']=net_paramsEnc['stride']
-        inputmodule_paramsDec['num_input_channels']=net_paramsEnc['block_configs'][-1][-1]
-    
-    return net_paramsEnc,net_paramsDec,inputmodule_paramsDec
+        inputmodule_paramsDec['num_input_channels']=net_paramsDec['block_configs'][0][0]
+
+        net_paramsRep['h_dim']=16384
+        net_paramsRep['z_dim']=512
+
+    elif Config == '3':
+        net_paramsEnc['block_configs']=[[32], [64], [64]]
+        net_paramsEnc['stride']=[[1], [2], [2]]
+        net_paramsDec['block_configs']=[[64], [32], [inputmodule_paramsEnc['num_input_channels']]]
+        net_paramsDec['stride']=net_paramsEnc['stride']
+        inputmodule_paramsDec['num_input_channels']=net_paramsDec['block_configs'][0][0]
+
+        net_paramsRep['h_dim']=65536
+        net_paramsRep['z_dim']=256
+
+    return net_paramsEnc, net_paramsDec, inputmodule_paramsEnc, inputmodule_paramsDec, net_paramsRep
 
 
 ######################### 0. EXPERIMENT PARAMETERS
-
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"Using device: {device}")
 
 crossval_cropped_folders = get_all_subfolders(CROPPED_PATCHES_DIR)
 annotated_folders = get_all_subfolders(ANNOTATED_PATCHES_DIR)
@@ -82,11 +92,14 @@ inputmodule_paramsEnc['num_input_channels']=3
 
 # 0.1 NETWORK TRAINING PARAMS
 VAE_params = {
-    'epochs': 50,
-    'batch_size': 256,
+    'epochs': 10,
+    'batch_size': 64,
     'lr': 1e-3,
     'weight_decay': 1e-5,
-    'img_size': (256,256),
+    'img_size': (128,128),
+    'beta_start': 0.0,
+    'beta_end': 4.0,
+    'warmup_epochs': 20,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
 }
 
@@ -98,13 +111,12 @@ VAE_params = {
 crossval_cropped_folders = get_all_subfolders(CROPPED_PATCHES_DIR)
 
 ae_train_ims, ae_train_meta = LoadCropped(
-    crossval_cropped_folders, n_images_per_folder=250,
+    crossval_cropped_folders, n_images_per_folder=30,
     excelFile=PATIENT_DIAGNOSIS_FILE, resize=VAE_params['img_size']
 )
 
 print("Cropped loaded:", ae_train_ims.shape, ae_train_meta.shape)
 print(ae_train_meta.head())
-
 
 # Annotated para aprender umbral de error (ROC)
 """ann_ims, ann_meta = LoadAnnotated(
@@ -128,7 +140,7 @@ print(f"Found {len(crossval_cropped_folders)} cropped folders and {len(annotated
 
 #this function takes images and metadata and returns a Standard_Dataset object 
 def _to_dataset(ims, meta, with_labels=False):
-    X = np.stack([im.transpose(2,0,1) for im in ims], axis=0) / 255.0
+    X = np.stack([im.transpose(2, 0, 1) for im in ims], axis=0).astype(np.float32) / 255.0
     if with_labels:
         y = np.array([m['Presence'] for m in meta], dtype=np.int64)
         return Standard_Dataset(X, y)
@@ -136,107 +148,94 @@ def _to_dataset(ims, meta, with_labels=False):
         return Standard_Dataset(X)
 
 ae_train_ds = _to_dataset(ae_train_ims, ae_train_meta, with_labels=False)
-ae_train_loader = DataLoader(ae_train_ds, batch_size=VAE_params['batch_size'], num_workers=4, shuffle=True)
-
-### 4. AE TRAINING
-
-# EXPERIMENTAL DESIGN:
-# TRAIN ON AE PATIENTS AN AUTOENCODER, USE THE ANNOTATED PATIENTS TO SET THE
-# THRESHOLD ON FRED, VALIDATE FRED FOR DIAGNOSIS ON A 10 FOLD SCHEME OF REMAINING
-# CASES.
-
-# 4.1 Data Split
-
-###### CONFIG1
-Config='1'
-net_paramsEnc, net_paramsDec, inputmodule_paramsDec=AEConfigs(Config)
-
-tmp_encoder = Encoder(inputmodule_paramsEnc, net_paramsEnc)
-tmp_encoder.eval()
-
-with torch.no_grad():
-    dummy = torch.zeros(
-        1,
-        inputmodule_paramsEnc['num_input_channels'],
-        VAE_params['img_size'][0],
-        VAE_params['img_size'][1],
-    )
-    h = tmp_encoder(dummy)          # (1, C', H', W')
-    h_dim = h.view(1, -1).size(1)   # flatten → size h_dim
-
-# define the parameters for the bottleneck representation
-net_paramsRep = {
-    'h_dim': h_dim,
-    'z_dim': 32,
-}
-
-model=VAECNN(inputmodule_paramsEnc, net_paramsEnc, 
-             inputmodule_paramsDec, net_paramsDec,
-             net_paramsRep).to(VAE_params['device'])
-
-# 4.2 Model Training
-optimizer = optim.Adam(model.parameters(), lr=VAE_params['lr'], weight_decay=VAE_params['weight_decay'])
-criterion = nn.MSELoss(reduction='mean')
-
-beta_start = 0.0
-beta_end = 1.0
-warmup_epochs = 20
+ae_train_loader = DataLoader(ae_train_ds, batch_size=VAE_params['batch_size'],
+                             shuffle=True)
 
 
-# KL for element and then the mean over batch
+#### 4. VAE TRAINING
+Config = '1'
+
+net_paramsEnc, net_paramsDec, inputmodule_paramsEnc, inputmodule_paramsDec, net_paramsRep = VAEConfigs(Config)
+
+# Build VAE model (do not modify VAECNN implementation)
+model = VAECNN(
+    inputmodule_paramsEnc,
+    net_paramsEnc,
+    inputmodule_paramsDec,
+    net_paramsDec,
+    net_paramsRep
+)
+
+model.to(VAE_params['device'])
+
+# 3. Optimizer
+optimizer = optim.Adam(
+    model.parameters(),
+    lr=VAE_params["lr"],
+    weight_decay=VAE_params["weight_decay"]
+)
+
+
 def kl_loss(mu, logvar):
-    kld_per_sample = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
-    return torch.mean(kld_per_sample)
+    return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
 
 
-def recon_loss_fn(x_recon, x):
-    # Sumamos sobre todos los píxeles y canales, luego promedio por batch
-    num_pixels = x.size(1) * x.size(2) * x.size(3)  # C*H*W
-    recon_loss = F.mse_loss(x_recon, x, reduction='sum') / (x.size(0) * num_pixels)
-    return recon_loss
-
+# 4. Training loop
 model.train()
-for epoch in range(VAE_params['epochs']):
-    epoch_loss = 0.0 # total loss
-    epoch_recon = 0.0 # reconstruction loss
-    epoch_kl = 0.0 # KL divergence loss
-
-    beta = min(beta_end,
-               beta_start + (epoch / warmup_epochs) * (beta_end - beta_start))
+for epoch in range(VAE_params["epochs"]):
+    epoch_recon_loss = 0.0
+    epoch_kld_loss   = 0.0
+    epoch_total_loss = 0.0
+    beta = min(VAE_params["beta_end"],
+               VAE_params["beta_start"] + (epoch / VAE_params["warmup_epochs"]) * (VAE_params["beta_end"] - VAE_params["beta_start"]))
 
     for batch in ae_train_loader:
-        x = batch.to(VAE_params['device']).to(torch.float32)
-        #print("Shape after dataloader: "+str(x.shape))
+        x = batch.to(torch.float32).to(VAE_params["device"])
+
         optimizer.zero_grad()
 
-        x_recon, mu, logvar = model(x) # forward pass (edited for VAE)
+        # Forward pass through VAE
+        recon, mu, logvar = model(x)
 
-        recon_loss = recon_loss_fn(x_recon, x)
-        kl = kl_loss(mu, logvar)
-        loss = recon_loss + beta * kl 
+        # Reconstruction loss (MSE)
+        recon_loss = F.mse_loss(recon, x, reduction="mean")
 
-        loss.backward()
+        # KLD
+        kld_per_sample = kl_loss(mu, logvar)
+        kld_loss = kld_per_sample.mean()
+
+        # Total loss
+        total_loss = recon_loss + beta * kld_loss
+
+        # Backprop
+        total_loss.backward()
         optimizer.step()
 
-        batch_size = x.size(0)
-        epoch_loss += loss.item() * batch_size
-        epoch_recon += recon_loss.item() * batch_size
-        epoch_kl += kl.item() * batch_size
-        with torch.no_grad():
-            print(f"mu mean={mu.mean().item():.4f}, mu std={mu.std().item():.4f}, "
-                f"logvar mean={logvar.mean().item():.4f}, logvar std={logvar.std().item():.4f}")
+        # accumulate
+        bs = x.size(0)
+        epoch_recon_loss += recon_loss.item() * bs
+        epoch_kld_loss   += kld_loss.item() * bs
+        epoch_total_loss += total_loss.item() * bs
 
+    # Normalize by dataset size
+    N = len(ae_train_ds)
+    epoch_recon_loss /= N
+    epoch_kld_loss   /= N
+    epoch_total_loss /= N
 
-    epoch_loss /= len(ae_train_ds)
-    epoch_recon /= len(ae_train_ds)
-    epoch_kl /= len(ae_train_ds)
+    # Print epoch summary
+    print(
+        f"[VAE Config {Config}] Epoch {epoch+1}/{VAE_params['epochs']} | "
+        f"Recon: {epoch_recon_loss:.6f} | "
+        f"Total: {epoch_total_loss:.6f} | "
+        f"KLD: {epoch_kld_loss:.6f} "
+    )
 
-    print(f"[VAE][Epoch {epoch+1}/{VAE_params['epochs']}] loss={epoch_loss:.5f} | recon={epoch_recon:.5f} | kld={epoch_kl:.5f}\n")
-
-
+# 5. Save model
 Path('checkpoints').mkdir(exist_ok=True)
-torch.save(model.state_dict(), 'checkpoints/VAE_System1.pth') # save model
+torch.save(model.state_dict(), 'checkpoints/VAE_System3.pth') # save model
 
-# Free GPU Memory After Training
-gc.collect()
+# 6. Cleanup
+del model, optimizer
 torch.cuda.empty_cache()
+gc.collect()

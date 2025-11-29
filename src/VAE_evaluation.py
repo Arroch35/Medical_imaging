@@ -28,7 +28,7 @@ import json
 from Models.VAEmodels import VAECNN, Encoder
 from Models.datasets import Standard_Dataset
 from utils import LoadAnnotated, get_all_subfolders
-from config import CROPPED_PATCHES_DIR, ANNOTATED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE, ANNOTATED_METADATA_FILE
+from config2 import CROPPED_PATCHES_DIR, ANNOTATED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE, ANNOTATED_METADATA_FILE
 
 
 def VAEConfigs(Config):
@@ -71,8 +71,8 @@ inputmodule_paramsEnc['num_input_channels']=3
 
 # 0.1 NETWORK TRAINING PARAMS
 VAE_params = {
-    'epochs': 25,
-    'batch_size': 256,
+    'epochs': 15,
+    'batch_size': 128,
     'lr': 1e-3,
     'weight_decay': 1e-5,
     'img_size': (256,256),
@@ -149,7 +149,7 @@ for config_id, path in zip(configs_to_run, checkpoint_paths):
     # define the parameters for the bottleneck representation
     net_paramsRep = {
         'h_dim': h_dim,
-        'z_dim': 32,
+        'z_dim': 8,
     }
 
     model = VAECNN(inputmodule_paramsEnc, net_paramsEnc,

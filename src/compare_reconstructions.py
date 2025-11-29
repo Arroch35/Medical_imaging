@@ -11,7 +11,8 @@ import pandas as pd
 from config2 import *
 
 TOP_N = 20
-
+SAVE_DIR = "../data/roc_curves"
+os.makedirs(SAVE_DIR, exist_ok=True)
 
 # loads an image and converts to RGB numpy array
 def load_image_rgb(path):
@@ -23,14 +24,42 @@ def load_image_rgb(path):
 def load_pairs():
     """
     Returns:
-        originals, recons : list of HxWx3 float32
+        originals, recons : list of HxWx3 float32 arrays
         filenames         : list of "PatID/filename.png"
         labels            : np.array of 0/1 (Presence)
     """
-    originals, recons, filenames = [], [], []
+    # detect delimiter automatically
+    df_labels = pd.read_excel(ANNOTATED_METADATA_FILE)
 
-    # Walk recursively across all patient subfolders
+    # needed columns
+    # required columns
+    required_cols = {"Pat_ID", "Window_ID", "Presence"}
+    if not required_cols.issubset(df_labels.columns):
+        raise ValueError(f"Label file missing required columns: {required_cols}")
+
+    # remove rows with missing labels
+    missing = df_labels["Presence"].isna().sum()
+    if missing > 0:
+        print(f"[Warning] {missing} rows have missing Presence → skipping them.")
+    df_labels = df_labels.dropna(subset=["Presence"])
+
+    # convert Presence to integer safely
+    df_labels["Presence"] = df_labels["Presence"].astype(int)
+
+    # Build dictionary (Pat_ID, Window_ID) → Presence
+    label_dict = {
+        (str(row.Pat_ID), str(row.Window_ID)): row.Presence
+        for _, row in df_labels.iterrows()
+    }
+    # ---------------------------------------------
+    # Walk and load image + reconstruction pairs
+    # ---------------------------------------------
+    originals, recons, filenames, labels = [], [], [], []
+
     for root, _, files in os.walk(ANNOTATED_PATCHES_DIR):
+
+        # Extract patient folder name
+        pat_id = os.path.basename(root)
 
         for fname in files:
             if not fname.lower().endswith(".png"):
@@ -38,10 +67,23 @@ def load_pairs():
 
             orig_path = os.path.join(root, fname)
 
-            # build relative path:
+            # Derive Window_ID by stripping leading zeros
+            window_id = os.path.splitext(fname)[0].lstrip("0")
+            if window_id == "":
+                window_id = "0"
+
+            # Retrieve label from dictionary
+            key = (pat_id[:-2], window_id)
+            if key not in label_dict:
+                print(f"[Warning] No label found for {key}, skipping.")
+                continue
+
+            label = label_dict[key]
+
+            # build relative path e.g. PatID/filename.png
             rel_path = os.path.relpath(os.path.join(root[:-2], fname), ANNOTATED_PATCHES_DIR)
 
-            # reconstruction must be in same relative location
+            # reconstruction path
             recon_path = os.path.join(RECON_DIR, "Config1", rel_path)
 
             if not os.path.exists(recon_path):
@@ -50,10 +92,10 @@ def load_pairs():
 
             originals.append(load_image_rgb(orig_path))
             recons.append(load_image_rgb(recon_path))
-            filenames.append(rel_path)  # store patient/id/imgname
+            filenames.append(rel_path)
+            labels.append(label)
 
-    return originals, recons, filenames
-
+    return originals, recons, filenames, np.array(labels, dtype=np.int32)
 
 # Metric functions
 def emr_dissimilarity(o, r):
@@ -129,7 +171,7 @@ def show_top(originals, recons, filenames, scores, title, top_n=20):
 
 
 if __name__ == "__main__":
-    originals, recons, filenames = load_pairs()
+    originals, recons, filenames, labels = load_pairs()
     print("Loaded pairs:", len(originals))
 
     df = compute_metrics(originals, recons, filenames)
@@ -137,8 +179,8 @@ if __name__ == "__main__":
 
     # Save metrics per patch so you can analyse them later
     df.to_csv("reconstruction_metrics.csv", index=False)
-
+    print("saved reconstruction_metrics.csv")
     # Example: visualize top errors for each metric
-    show_top(originals, recons, filenames, df["mse_hsv_V"].values, "Value MSE HSV", TOP_N)
-    show_top(originals, recons, filenames, df["mse_rgb"].values,    "MSE RGB", TOP_N)
-    show_top(originals, recons, filenames, df["emr_dissim"].values, "EMR dissimilarity", TOP_N)
+    # show_top(originals, recons, filenames, df["mse_hsv_V"].values, "Value MSE HSV", TOP_N)
+    # show_top(originals, recons, filenames, df["mse_rgb"].values,    "MSE RGB", TOP_N)
+    # show_top(originals, recons, filenames, df["emr_dissim"].values, "EMR dissimilarity", TOP_N)

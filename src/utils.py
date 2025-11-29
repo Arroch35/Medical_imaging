@@ -250,6 +250,8 @@ def LoadAnnotated(list_folders, patient_excel, n_images_per_folder=None, excelFi
 
                 if presence_val not in [-1, 1]:
                     continue
+                if presence_val == -1:
+                    presence_val = 0  # ROC curve expects 0/1 values
 
             record = {'PatID': patid, 'imfilename': filename, 'Presence': presence_val}
             images.append(arr)
