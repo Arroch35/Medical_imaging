@@ -271,104 +271,13 @@ class AutoEncoderCNN(nn.Module):
         
         return x
 
-class UnetCNN(nn.Module):
-    r"""OneShotCNNNet-BC model class
-    `".
-    """
-
-    def __init__(self, inputmodule_params,net_params):
+class AEWithLatent(nn.Module):
+    def __init__(self, ae):
         super().__init__()
-        
-        
-        num_input_channels=inputmodule_params['num_input_channels']
-        self.dim=net_params['dim']
-        self.upPoolMode='bilinear'
-        if self.dim==3:
-            self.upPoolMode='trilinear'
-        drop_rate=net_params['drop_rate']
-        block_configs=net_params['block_configs']
-        n_blocks=len(block_configs)
-        
-        self.prct=None
-        # Encoder
-        self.encoder=nn.Sequential(          
-            )
-        outchannels_encoder=[]
-        for i in np.arange(n_blocks):
-            block = _CNNBlock(
-                num_input_channels=num_input_channels,
-                drop_rate=drop_rate,
-                block_config=block_configs[i], 
-                dim=self.dim
-                
-            )
-            self.encoder.add_module("cnnblock%d" % (i + 1), block)
-            if self.dim==2:
-                self.encoder.add_module("mxpool%d" % (i + 1), 
-                                         nn.MaxPool2d(kernel_size=2, stride=2, padding=0))
-            elif self.dim==3:
-                self.encoder.add_module("mxpool%d" % (i + 1), 
-                                         nn.MaxPool3d(kernel_size=2, stride=2, padding=0))
-            num_input_channels=block_configs[i][-1] 
-            outchannels_encoder.append(num_input_channels)
-            
-        # Decoder
-        self.decoder=nn.Sequential(          
-            )
-        
-        for i in np.arange(n_blocks)[::-1]:
-            block = _CNNBlock(
-                num_input_channels=num_input_channels+outchannels_encoder[i],
-                drop_rate=drop_rate,
-                block_config=block_configs[i][::-1], 
-                dim=self.dim,
-                decoder=True
-            )
-            self.decoder.add_module("uppool%d" % (i + 1), 
-                                      nn.Upsample(scale_factor=2, 
-                                                  mode=self.upPoolMode, align_corners=True))
+        self.encoder = ae.encoder
+        self.decoder = ae.decoder
 
-            self.decoder.add_module("cnnblock%d" % (i + 1), block)
-      
-
-            num_input_channels=block_configs[i][0]
-        
-        block =  _UnCNNLayer(
-            num_input_channels,
-            n_neurons=inputmodule_params['num_input_channels'],
-            drop_rate=drop_rate, dim=self.dim
-            
-         )
-        self.decoder.add_module("cnnblock%d" % (i), block)
-        
-    def forward(self, x: Tensor) -> Tensor:
-        
-        input_sze=x.shape
-        n_blocks=int(len(list(self.encoder.named_children()))/2)
-        #encoder
-        x_curr=[]
-        for i in np.arange(n_blocks):
-            x=self.encoder.get_submodule("cnnblock%d" % (i + 1))(x)
-            x_curr.append(x)
-            x=self.encoder.get_submodule("mxpool%d" % (i + 1))(x)
-                   
-       
-        #decoder with skip connections
-        for i in np.arange(n_blocks)[::-1]:
-            x = self.decoder.get_submodule("uppool%d" % (i + 1))(x) 
-            # diffY = x_curr[i].size()[-2] - x.size()[-2]
-            # diffX = x_curr[i].size()[-1] - x.size()[-1]
-
-            # x = F.pad(x, [diffX // 2, diffX - diffX // 2,
-            #                 diffY // 2, diffY - diffY // 2])
-            x=F.upsample(x,size=x_curr[i].size()[2::],mode=self.upPoolMode)
-            x=torch.cat([x_curr[i], x], dim=1)
-            x=self.decoder.get_submodule("cnnblock%d" % (i + 1))(x)
-            
-        x=self.decoder.get_submodule("cnnblock%d" % (0))(x)    
-
-        return x    
-    
-
-
-
+    def forward(self, x):
+        latent = self.encoder(x)
+        recon = self.decoder(latent)
+        return latent, recon

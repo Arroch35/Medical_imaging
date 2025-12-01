@@ -1,31 +1,15 @@
-# Standard Libraries
 import numpy as np
 import pandas as pd
 import glob
 from PIL import Image
-from sklearn.metrics import roc_curve, auc
-import matplotlib.pyplot as plt
-
-# Torch Libraries
-from torch.utils.data import DataLoader
-import gc
-import torch
-import torch.nn as nn
-import torch.optim as optim
-
-
-# Own Functions
-from Models.AEmodels import AutoEncoderCNN
-from Models.datasets import Standard_Dataset
-
-
-from config import CROPPED_PATCHES_DIR, ANNOTATED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE, ANNOTATED_METADATA_FILE, RECON_DIR
-
-from tqdm import tqdm
-import wandb
 import os
 
+from Models.datasets import Standard_Dataset
+
+inputmodule_paramsEnc = {'num_input_channels': 3}
+
 def AEConfigs(Config):
+    print(Config)
     net_paramsEnc={}
     net_paramsDec={}
     inputmodule_paramsDec={}
@@ -55,7 +39,6 @@ def AEConfigs(Config):
         net_paramsDec['block_configs']=[[64],[32],[inputmodule_paramsEnc['num_input_channels']]]
         net_paramsDec['stride']=net_paramsEnc['stride']
         inputmodule_paramsDec['num_input_channels']=net_paramsEnc['block_configs'][-1][-1]
-    
     return net_paramsEnc,net_paramsDec,inputmodule_paramsDec
 
 def _read_metadata_excel(excel_path):
@@ -90,6 +73,170 @@ def _window_id_from_filename(fname):
     base = os.path.basename(fname)
     name, _ = os.path.splitext(base)
     return name
+
+def LoadCropped(list_folders, n_images_per_folder=None, excelFile=None, resize=None, verbose=False):
+    """
+    Load cropped patches (non-annotated), optionally resizing images.
+    If a PatientDiagnosis.csv file (with columns CODI, DENSITAT) is provided,
+    only patches from healthy patients (DENSITAT == 'NEGATIVA') are loaded.
+
+    Parameters
+    ----------
+    list_folders : list of str
+        Paths containing .png patches (e.g. PatID_Section# folders)
+    n_images_per_folder : int or None
+        Limit number of patches per folder (first N if provided)
+    excelFile : str or None
+        Path to PatientDiagnosis.csv (columns: CODI, DENSITAT)
+    resize : tuple(int, int) or None
+        Target image size (H, W). If None, keep original 256x256.
+    verbose : bool
+        Print progress messages if True.
+
+    Returns
+    -------
+    Ims : np.ndarray
+        Array of images with shape (N, H, W, 3), dtype=uint8
+    metadata : pd.DataFrame
+        DataFrame with columns ['PatID', 'imfilename']
+    """
+    
+    healthy_pats = None
+    all_patids = set()
+    skipped_patids = set()
+
+    if excelFile is not None:
+        if not os.path.exists(excelFile):
+            raise FileNotFoundError(f"[LoadCropped] File not found: {excelFile}")
+
+        try:
+            df_diag = pd.read_csv(excelFile)
+        except Exception:
+            df_diag = pd.read_excel(excelFile)
+
+        # Normalize column names
+        df_diag.columns = [c.strip().upper() for c in df_diag.columns]
+        if not {"CODI", "DENSITAT"}.issubset(df_diag.columns):
+            raise ValueError("Diagnosis file must contain columns: 'CODI' and 'DENSITAT'")
+
+        # Select healthy patients: DENSITAT == 'NEGATIVA'
+        healthy_mask = df_diag["DENSITAT"].astype(str).str.upper().str.strip() == "NEGATIVA"
+        healthy_pats = set(df_diag.loc[healthy_mask, "CODI"].astype(str))
+        if verbose:
+            print(f"[LoadCropped] Found {len(healthy_pats)} healthy patients in {excelFile}")
+
+
+    records, images = [], []
+
+    for folder in list_folders:
+        folder_name = os.path.basename(os.path.normpath(folder))
+        patid = folder_name.split("_")[0]  
+        all_patids.add(patid)
+
+        # Skip if not a healthy patient (if CSV provided)
+        if healthy_pats is not None and patid not in healthy_pats:
+            skipped_patids.add(patid)
+            if verbose:
+                print(f"[LoadCropped] Skipping non-healthy patient: {patid}")
+            continue
+
+        if not os.path.isdir(folder):
+            if verbose:
+                print(f"[LoadCropped] Folder not found, skipping: {folder}")
+            continue
+
+        files = sorted(glob.glob(os.path.join(folder, "*.png")))
+        if n_images_per_folder is not None:
+            files = files[:n_images_per_folder]
+
+        for fpath in files:
+            try:
+                im = Image.open(fpath).convert("RGB")
+                if resize is not None:
+                    im = im.resize(resize, Image.BILINEAR)
+                arr = np.asarray(im, dtype=np.uint8)
+            except Exception as e:
+                if verbose:
+                    print(f"[LoadCropped] Failed to read {fpath}: {e}")
+                continue
+
+            filename = os.path.basename(fpath)
+            record = {"PatID": patid, "imfilename": filename}
+            records.append(record)
+            images.append(arr)
+
+
+    # Calculate percentage of non-healthy patients
+    total_patients = len(all_patids)
+    non_healthy_count = len(skipped_patids)
+    if total_patients > 0:
+        perc_non_healthy = 100 * non_healthy_count / total_patients
+    else:
+        perc_non_healthy = 0.0
+
+    if verbose:
+        print(f"[LoadCropped] Total patients found: {total_patients}")
+        print(f"[LoadCropped] Non-healthy patients skipped: {non_healthy_count} ({perc_non_healthy:.2f}%)")
+        print(f"[LoadCropped] Loaded {len(images)} images from {len(records)} healthy patients.")
+
+
+    if len(images) == 0:
+        H, W = resize if resize is not None else (256, 256)
+        Ims = np.zeros((0, H, W, 3), dtype=np.uint8)
+    else:
+        Ims = np.stack(images, axis=0).astype(np.uint8)
+
+    metadata = pd.DataFrame.from_records(records)
+    if verbose:
+        print(f"[LoadCropped] Loaded {len(images)} images from {len(metadata['PatID'].unique())} healthy patients.")
+    return Ims, metadata
+
+
+def GetImagePaths(list_folders, n_images_per_folder=None, excelFile=None, verbose=False):
+    """
+    Returns image file paths + metadata without loading images.
+    """
+
+    healthy_pats = None
+    all_patids = set()
+    skipped_patids = set()
+
+    if excelFile is not None:
+        df_diag = pd.read_csv(excelFile) if os.path.isfile(excelFile) else None
+        df_diag.columns = [c.strip().upper() for c in df_diag.columns]
+
+        healthy_mask = df_diag["DENSITAT"].astype(str).str.upper().str.strip() == "NEGATIVA"
+        healthy_pats = set(df_diag.loc[healthy_mask, "CODI"].astype(str))
+        if verbose:
+            print(f"[GetImagePaths] Healthy patients: {len(healthy_pats)}")
+
+    records = []
+
+    for folder in list_folders:
+        folder_name = os.path.basename(os.path.normpath(folder))
+        patid = folder_name.split("_")[0]
+        all_patids.add(patid)
+
+        if healthy_pats is not None and patid not in healthy_pats:
+            skipped_patids.add(patid)
+            if verbose:
+                print(f"[GetImagePaths] Skipping non-healthy: {patid}")
+            continue
+
+        files = sorted(glob.glob(os.path.join(folder, "*.png")))
+        if n_images_per_folder is not None:
+            files = files[:n_images_per_folder]
+
+        for fpath in files:
+            records.append({"PatID": patid, "path": fpath})
+
+    metadata = pd.DataFrame.from_records(records)
+
+    if verbose:
+        print(f"[GetImagePaths] Total images: {len(metadata)}")
+        print(f"[GetImagePaths] Unique patients: {len(metadata['PatID'].unique())}")
+
+    return metadata
 
 
 def LoadAnnotated(list_folders, patient_excel, n_images_per_folder=None, excelFile=None, resize=None, verbose=False):
@@ -197,12 +344,13 @@ def LoadAnnotated(list_folders, patient_excel, n_images_per_folder=None, excelFi
                     except ValueError:
                         window_id_clean = window_id
 
-                m = df[df['Window_ID'].astype(str).str.strip() == window_id_clean]
-                if m.empty and 'Pat_ID' in df.columns:
-                    m = df[(df['Window_ID'].astype(str).str.strip() == window_id_clean) &
-                           (df['Pat_ID'].astype(str).str.strip() == patid)]
+                
+                m = df[(df['Window_ID'].astype(str).str.strip() == window_id_clean) &
+                       (df['Pat_ID'].astype(str).str.strip() == patid)]
                 if not m.empty and 'Presence' in m.columns:
                     presence_val = m.iloc[0]['Presence']
+                else:
+                    continue
 
                 if presence_val not in [-1, 1]:
                     continue
@@ -235,125 +383,10 @@ def get_all_subfolders(root_dir):
     subfolders = sorted(subfolders)
     return subfolders
 
-# 0.1 AE PARAMETERS
-inputmodule_paramsEnc={}
-inputmodule_paramsEnc['num_input_channels']=3
-
-# 0.1 NETWORK TRAINING PARAMS
-AE_params = {
-    'epochs': 1,
-    'batch_size': 256,
-    'lr': 1e-3,
-    'weight_decay': 1e-5,
-    'img_size': (256,256),   
-    'device': 'cuda' if torch.cuda.is_available() else 'cpu',
-}
-
-#### 1. LOAD DATA: Implement 
-# 1.1 Patient Diagnosis
-df_diag = pd.read_csv(PATIENT_DIAGNOSIS_FILE) if os.path.isfile(PATIENT_DIAGNOSIS_FILE) else None
-
-
-# 1.2 Patches Data
-annotated_folders = get_all_subfolders(ANNOTATED_PATCHES_DIR)
-
-ae_val_ims, ae_val_meta = LoadAnnotated(
-    annotated_folders, patient_excel=PATIENT_DIAGNOSIS_FILE,n_images_per_folder=None, 
-    excelFile=ANNOTATED_METADATA_FILE, resize=AE_params['img_size'], verbose=True
-)
-
-
-#### 3. lOAD PATCHES
-def _to_dataset(ims, meta, with_labels=False):
+def to_dataset(ims, meta, with_labels=False):
     X = np.stack([im.transpose(2,0,1) for im in ims], axis=0) / 255.0 
     if with_labels:
         y = meta['Presence'].to_numpy(dtype=np.int64) 
         return Standard_Dataset(X, y)
     else:
         return Standard_Dataset(X)
-
-ae_val_ds = _to_dataset(ae_val_ims, ae_val_meta, with_labels=True)
-ae_val_loader = DataLoader(ae_val_ds, batch_size=AE_params['batch_size'], shuffle=False)
-
-inputmodule_paramsEnc = {'num_input_channels': 3} 
-configs_to_run = ['1'] # , '2', '3'
-
-checkpoint_paths = [f'checkpoints/AE_Config{c}.pth' for c in configs_to_run]
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-# --- 1. Load Models into a List ---
-loaded_models = []
-for config_id, path in zip(configs_to_run, checkpoint_paths):
-    if not os.path.exists(path):
-        print(f"[Warning] checkpoint not found: {path} -- skipping config {config_id}")
-        continue
-    print(f"[Load] Config {config_id} from {path}")
-    net_paramsEnc, net_paramsDec, inputmodule_paramsDec = AEConfigs(config_id)
-    model = AutoEncoderCNN(inputmodule_paramsEnc, net_paramsEnc, inputmodule_paramsDec, net_paramsDec)
-    # map_location device ensures compatibility
-    state = torch.load(path, map_location=device)
-    model.load_state_dict(state)
-    model.to(device)
-    model.eval()
-    loaded_models.append((config_id, model))
-
-if len(loaded_models) == 0:
-    raise RuntimeError("No models loaded. Checkpoint files missing.")
-
-# We'll iterate once through the validation loader and for every model save reconstructions.
-# Because DataLoader shuffle=False and dataset order matches ae_val_meta, we can map by global index.
-global_idx = 0  # tracks absolute index in the dataset
-total_samples = len(ae_val_ds)
-
-# For nicer progress bar:
-pbar = tqdm(total=total_samples, desc="Saving reconstructions")
-
-with torch.no_grad():
-    for batch in ae_val_loader:
-        # Standard_Dataset probably yields either x or (x, y) depending on implementation
-        if isinstance(batch, (list, tuple)):
-            x_batch = batch[0]
-        else:
-            x_batch = batch
-        # ensure tensor on correct device and dtype
-        x_batch = x_batch.to(dtype=torch.float32, device=device)
-
-        batch_size = x_batch.shape[0]
-
-        # For each model produce recon and save
-        for config_id, model in loaded_models:
-            recon_batch = model(x_batch)  # (B, C, H, W)
-            # Move to cpu and clamp
-            recon_batch = recon_batch.detach().cpu().clamp(0.0, 1.0)
-
-            # Save each image individually mapping to meta
-            for i in range(batch_size):
-                idx = global_idx + i
-                if idx >= len(ae_val_meta):
-                    # safety guard
-                    continue
-                row = ae_val_meta.iloc[idx]
-                patid = str(row['PatID'])
-                filename = str(row['imfilename'])
-
-                # create patient dir under RECON_DIR (optionally include config id subdir)
-                out_dir = os.path.join(RECON_DIR, f"Config{config_id}", patid)
-                os.makedirs(out_dir, exist_ok=True)
-
-                # convert to HWC uint8
-                img_tensor = recon_batch[i]  # (C, H, W)
-                img_np = (img_tensor.numpy().transpose(1,2,0) * 255.0).round().astype('uint8')  # (H,W,C)
-
-                # Save with same filename
-                out_path = os.path.join(out_dir, filename)
-                try:
-                    pil = Image.fromarray(img_np)
-                    pil.save(out_path)
-                except Exception as e:
-                    print(f"[Save Error] idx {idx} file {out_path}: {e}")
-
-        global_idx += batch_size
-        pbar.update(batch_size)
-
-pbar.close()
-print("All reconstructions saved to:", RECON_DIR)

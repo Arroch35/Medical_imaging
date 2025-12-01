@@ -299,7 +299,7 @@ ae_val_ims, ae_val_meta = LoadAnnotated(
 
 
 #### 3. lOAD PATCHES
-def _to_dataset(ims, meta, with_labels=False):
+def to_dataset(ims, meta, with_labels=False):
     X = np.stack([im.transpose(2,0,1) for im in ims], axis=0) / 255.0 
     if with_labels:
         y = meta['Presence'].to_numpy(dtype=np.int64) 
@@ -307,7 +307,7 @@ def _to_dataset(ims, meta, with_labels=False):
     else:
         return Standard_Dataset(X)
 
-ae_val_ds = _to_dataset(ae_val_ims, ae_val_meta, with_labels=True)
+ae_val_ds = to_dataset(ae_val_ims, ae_val_meta, with_labels=True)
 ae_val_loader = DataLoader(ae_val_ds, batch_size=AE_params['batch_size'], shuffle=False)
 
 # Evaluation:
