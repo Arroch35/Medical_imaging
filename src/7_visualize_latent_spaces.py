@@ -82,3 +82,6 @@ visualize_latent_spaces(old_lat_test, new_lat_test, y_test, title_suffix="(Test)
 
 
 # todo: cambiar los string paths paths del config file
+# poner a entrenar el cl model, que ha dado error en el cluster
+# Cambiar las cosas que pone de cpu a gpu
+# Probar los AE entrenados nuevos
