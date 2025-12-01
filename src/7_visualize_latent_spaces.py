@@ -79,3 +79,6 @@ visualize_latent_spaces(old_lat_train, new_lat_train, y_train, title_suffix="(Tr
 
 print("Visualizing TEST split...")
 visualize_latent_spaces(old_lat_test, new_lat_test, y_test, title_suffix="(Test)")
+
+
+# todo: cambiar los string paths paths del config file
