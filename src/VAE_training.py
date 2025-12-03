@@ -199,7 +199,7 @@ for epoch in range(VAE_params["epochs"]):
         recon, mu, logvar = model(x)
 
         # Reconstruction loss (MSE)
-        recon_loss = F.mse_loss(recon, x, reduction="sum") / x.size(0)
+        recon_loss = F.mse_loss(recon, x, reduction="sum") / x.size(0) # criterion
 
         # KLD
         kld_per_sample = kl_loss(mu, logvar)
@@ -256,8 +256,8 @@ save_dict = {
     "scaler_stats": None,              # if you later add normalization
     "train_meta": vae_train_meta,      # optional: metadata snapshot
 }
-torch.save(save_dict, "checkpoints/VAE_System1.pth")
-print(f'Saved VAE config {Config} checkpoint to checkpoints/VAE_System1.pth')
+torch.save(save_dict, f"checkpoints/VAE_Config{Config}.pth")
+print(f'Saved VAE config {Config} checkpoint to checkpoints/VAE_Config{Config}.pth')
 # 6. Cleanup
 del model, optimizer
 torch.cuda.empty_cache()

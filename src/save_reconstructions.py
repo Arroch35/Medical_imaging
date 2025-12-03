@@ -43,7 +43,7 @@ def VAEConfigs(Config):
         net_paramsDec['stride']=net_paramsEnc['stride']
         inputmodule_paramsDec['num_input_channels']=net_paramsDec['block_configs'][0][0]
 
-        net_paramsRep['h_dim']=16384
+        net_paramsRep['h_dim']=65536
         net_paramsRep['z_dim']=256
 
     elif Config == '2':
@@ -53,7 +53,7 @@ def VAEConfigs(Config):
         net_paramsDec['stride']=net_paramsEnc['stride']
         inputmodule_paramsDec['num_input_channels']=net_paramsDec['block_configs'][0][0]
 
-        net_paramsRep['h_dim']=16384
+        net_paramsRep['h_dim']=65536
         net_paramsRep['z_dim']=512
 
     elif Config == '3':
@@ -63,11 +63,10 @@ def VAEConfigs(Config):
         net_paramsDec['stride']=net_paramsEnc['stride']
         inputmodule_paramsDec['num_input_channels']=net_paramsDec['block_configs'][0][0]
 
-        net_paramsRep['h_dim']=65536
+        net_paramsRep['h_dim']=262144
         net_paramsRep['z_dim']=256
 
     return net_paramsEnc, net_paramsDec, inputmodule_paramsEnc, inputmodule_paramsDec, net_paramsRep
-
 ######################### 0. EXPERIMENT PARAMETERS
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -85,10 +84,10 @@ inputmodule_paramsEnc['num_input_channels']=3
 # 0.1 NETWORK TRAINING PARAMS
 VAE_params = {
     'epochs': 50,
-    'batch_size': 64,
+    'batch_size': 128,
     'lr': 1e-3,
     'weight_decay': 1e-5,
-    'img_size': (128,128),
+    'img_size': (256, 256),
     'beta_start': 0.0,
     'beta_max': 1.0,
     'beta_warmup_epochs': 40,
@@ -144,7 +143,7 @@ vae_val_loader = DataLoader(vae_val_ds, batch_size=VAE_params['batch_size'],
 
 
 #### 4. VAE TRAINING
-Config = '1'
+Config = '3'
 
 net_paramsEnc, net_paramsDec, inputmodule_paramsEnc, inputmodule_paramsDec, net_paramsRep = VAEConfigs(Config)
 
@@ -159,7 +158,7 @@ model = VAECNN(
 
 
 # Load checkpoint --> trained weights
-ckpt_path = f"checkpoints/VAE_System{Config}.pth"
+ckpt_path = f"checkpoints/VAE_Config{Config}.pth"
 ckpt = torch.load(ckpt_path, map_location=device)
 
 state_dict = ckpt["state_dict"]
@@ -196,9 +195,12 @@ with torch.no_grad():
         x_batch = x_batch.to(device=device, dtype=torch.float32)
         batch_size = x_batch.shape[0]
 
-        recon_batch, mu, logvar = model(x_batch)
+        recon_batch, mu, logvar = model(x_batch)  #
+        # detach and move to CPU because of no gradients
+        # clamp is for valid image range
         recon_batch = recon_batch.detach().cpu().clamp(0.0, 1.0)
 
+        # save each image in the batch
         for i in range(batch_size):
             idx = global_idx + i
             if idx >= len(vae_val_meta):
@@ -208,14 +210,17 @@ with torch.no_grad():
             patid = str(row["PatID"])
             filename = str(row["imfilename"])
 
-            out_dir = os.path.join(RECON_DIR, "VAE_Config1", patid)  # change name if needed
+            out_dir = os.path.join(RECON_DIR, f"VAE_Config{Config}", patid)  # change name if needed
             os.makedirs(out_dir, exist_ok=True)
 
+            # tensor to numpy array
             img_tensor = recon_batch[i]  # (C, H, W)
+            # convert to (H, W, C) and scale to [0, 255]
             img_np = (img_tensor.numpy().transpose(1, 2, 0) * 255.0).round().astype("uint8")
 
             out_path = os.path.join(out_dir, filename)
             try:
+                # create PIL image from the numpy array in RGB format
                 pil = Image.fromarray(img_np)
                 pil.save(out_path)
             except Exception as e:
