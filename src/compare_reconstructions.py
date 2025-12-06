@@ -14,7 +14,7 @@ from config2 import *
 TOP_N = 20
 SAVE_DIR = "../data/roc_curves"
 os.makedirs(SAVE_DIR, exist_ok=True)
-Config = "1"
+Config = "2"
 
 
 # loads an image and converts to RGB numpy array
@@ -48,7 +48,7 @@ def load_pairs():
     # -------------------------------
     # Load reconstructions depending on CONFIG
     # -------------------------------
-    recon_root = os.path.join(RECON_DIR, f"VAE_Config{Config}")
+    recon_root = os.path.join(RECON_DIR, f"AE_Config{Config}")
 
     # Build mapping: Pat_ID → multiple annotated folders (001_0, 001_1…)
     annotated_subfolders = os.listdir(ANNOTATED_PATCHES_DIR)
@@ -126,6 +126,22 @@ def mse_red(o, r):
     # channel 0 = R
     return np.mean((o[..., 0] - r[..., 0]) ** 2)
 
+def mse_red_masked(o, r, red_thresh=0.4):
+    # o, r expected in [0, 1]
+    red = o[..., 0]
+    green = o[..., 1]
+    blue = o[..., 2]
+
+    # Simple heuristic: red dominant over G/B and sufficiently strong
+    red_mask = (red > red_thresh) & (red > green + 0.05) & (red > blue + 0.05)
+
+    if not np.any(red_mask):
+        # no red pixels in original – define metric as 0 or np.nan
+        return 0.0
+
+    diff = o[..., 0] - r[..., 0]
+    return np.mean(diff[red_mask] ** 2)
+
 
 def mse_hsv_value(o, r):
     hsv_o = rgb_to_hsv(o)
@@ -137,6 +153,19 @@ def mse_hsv_hue(o, r):
     hsv_r = rgb_to_hsv(r)
     return np.mean((hsv_o[..., 0] - hsv_r[..., 0]) ** 2)  # H channel
 
+def mse_hsv_hue_circular(o, r):
+    hsv_o = rgb_to_hsv(o)
+    hsv_r = rgb_to_hsv(r)
+
+    h1 = hsv_o[..., 0]
+    h2 = hsv_r[..., 0]
+
+    # circular difference on unit circle
+    dh = np.abs(h1 - h2)
+    dh = np.minimum(dh, 1.0 - dh)  # because 0 and 1 are the same hue
+    return np.mean(dh ** 2)
+
+
 def compute_metrics(originals, recons, filenames):
     rows = []
     for o, r, name in zip(originals, recons, filenames):
@@ -147,9 +176,9 @@ def compute_metrics(originals, recons, filenames):
             "emr_dissim":      emr_dissimilarity(o, r),
             "mse_rgb":         mse_rgb(o, r),
             "max_p99":         max_percentile(o, r, p=99),
-            "mse_red":         mse_red(o, r),
+            "mse_red":         mse_red_masked(o, r),
             "mse_hsv_V":       mse_hsv_value(o, r),
-            "mse_hsv_H":       mse_hsv_hue(o, r)
+            "mse_hsv_H":       mse_hsv_hue_circular(o, r)
         }
         rows.append(row)
     return pd.DataFrame(rows)
@@ -173,9 +202,11 @@ def show_top(originals, recons, filenames, scores, title, top_n=20):
         plt.show()
     plt.close()
 
+
+
 def plot_10fold_roc(df, metric_name, labels_column="Presence"):
 
-    SAVE_SUBDIR = os.path.join(SAVE_DIR, f"VAE_Config{Config}")
+    SAVE_SUBDIR = os.path.join(SAVE_DIR, f"AE_Config{Config}")
     os.makedirs(SAVE_SUBDIR, exist_ok=True)
 
     y = df[labels_column].values
@@ -247,24 +278,22 @@ if __name__ == "__main__":
     print(df.head())
 
     # Save metrics per patch so you can analyse them later
-    df.to_csv(f"reconstruction_metrics{Config}.csv", index=False)
+    df.to_csv(f"ae_reconstruction_metrics{Config}.csv", index=False)
     print("saved reconstruction_metrics.csv")
-    # Example: visualize top errors for each metric
+     # Example: visualize top errors for each metric
     # show_top(originals, recons, filenames, df["mse_hsv_V"].values, "Value MSE HSV", TOP_N)
-    show_top(originals, recons, filenames, df["mse_rgb"].values,    "MSE RGB", TOP_N)
+    # show_top(originals, recons, filenames, df["mse_rgb"].values,    "MSE RGB", TOP_N)
     # show_top(originals, recons, filenames, df["emr_dissim"].values, "EMR dissimilarity", TOP_N)
-
     # get the df created with the metrics and do 10-fold ROC curves for each metric
-    # df = pd.read_csv(f"reconstruction_metrics{Config}.csv")
-    # metric_names = [
-    #     "emr_dissim",
-    #     "mse_rgb",
-    #     "max_p99",
-    #     "mse_red",
-    #     "mse_hsv_V",
-    #     "mse_hsv_H"
-    # ]
-    # for metric in metric_names:
-    #     plot_10fold_roc(df, metric_name=metric, labels_column="Presence")
-    #     print(f"Plotted ROC curve for {metric}")
-
+    df = pd.read_csv(f"reconstruction_metrics{Config}.csv")
+    metric_names = [
+        "emr_dissim",
+        "mse_rgb",
+        "max_p99",
+        "mse_red",
+        "mse_hsv_V",
+        "mse_hsv_H"
+    ]
+    for metric in metric_names:
+        plot_10fold_roc(df, metric_name=metric, labels_column="Presence")
+        print(f"Plotted ROC curve for {metric}")

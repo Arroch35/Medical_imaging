@@ -1,12 +1,3 @@
-# Standard Libraries
-import numpy as np
-import pandas as pd
-import glob
-from PIL import Image
-from sklearn.metrics import roc_curve, auc
-import matplotlib.pyplot as plt
-
-# Torch Libraries
 from torch.utils.data import DataLoader
 import gc
 import torch
@@ -23,9 +14,11 @@ from Models.AEmodels import VAECNN
 from Models.datasets import Standard_Dataset
 from utils import *
 from config2 import *
+from compare_reconstructions import *
 
 torch.backends.cudnn.benchmark = True
 
+Config = '1'
 
 def VAEConfigs(Config):
     inputmodule_paramsEnc = {'dim_input': 256, 'num_input_channels': 3}
@@ -99,51 +92,7 @@ VAE_params = {
 #### 1. LOAD DATA: Implement
 
 # 1.1 Patient Diagnosis
-annotated_folders = get_all_subfolders(ANNOTATED_PATCHES_DIR)
-
-vae_val_ims, vae_val_meta = LoadAnnotated(
-    annotated_folders, patient_excel=PATIENT_DIAGNOSIS_FILE,n_images_per_folder=None,
-    excelFile=ANNOTATED_METADATA_FILE, resize=VAE_params['img_size'], verbose=True
-)
-
-print("Annotated loaded:", vae_val_ims.shape, vae_val_meta.shape)
-print(vae_val_meta.head())
-
-
-# Annotated para aprender umbral de error (ROC)
-"""ann_ims, ann_meta = LoadAnnotated(
-    annotated_folders, n_images_per_folder=5, excelFile=ANNOTATED_METADATA_FILE,
-    resize=VAE_params['img_size']
-)
-print("Annotated loaded:", ann_ims.shape, ann_meta.shape)
-print(ann_meta.head())
-"""
-#### 2. DATA SPLITING INTO INDEPENDENT SETS
-
-# 2.0 Annotated set for FRed optimal threshold
-# later
-# 2.1 AE trainnig set
-
-# 2.1 Diagosis crossvalidation set
-
-#### 3. lOAD PATCHES
-
-#this function takes images and metadata and returns a Standard_Dataset object
-def _to_dataset(ims, meta, with_labels=False):
-    X = np.stack([im.transpose(2, 0, 1) for im in ims], axis=0).astype(np.float32) / 255.0
-    if with_labels:
-        y = meta['Presence'].to_numpy(dtype=np.int64)
-        return Standard_Dataset(X, y)
-    else:
-        return Standard_Dataset(X)
-
-vae_val_ds = _to_dataset(vae_val_ims, vae_val_meta, with_labels=True) #Standard_Dataset object
-vae_val_loader = DataLoader(vae_val_ds, batch_size=VAE_params['batch_size'],
-                             shuffle=False)
-
-
-#### 4. VAE TRAINING
-Config = '1'
+cropped_folders = get_all_subfolders(CROPPED_PATCHES_DIR)
 
 net_paramsEnc, net_paramsDec, inputmodule_paramsEnc, inputmodule_paramsDec, net_paramsRep = VAEConfigs(Config)
 
@@ -178,56 +127,97 @@ for key, value in state_dict.items():
     print(f"state dict= {key}: {value.shape}")
     break  # print only the first item
 
-# ------------------ 3. Run reconstructions & save ------------------
-global_idx = 0
-total_samples = len(vae_val_ims)
 
-pbar = tqdm.tqdm(total=total_samples, desc="Saving VAE reconstructions")
+list_ims_meta = LoadCropped_byPatient(cropped_folders, n_folders=155,
+                                      resize=VAE_params['img_size'], verbose=False)
+print(f"Loaded {len(list_ims_meta)} patients' cropped images and metadata.")
 
+def _to_dataset(ims, meta, with_labels=False):
+    X = np.stack([im.transpose(2, 0, 1) for im in ims], axis=0).astype(np.float32) / 255.0
+    if with_labels:
+        y = meta['Presence'].to_numpy(dtype=np.int64)
+        return Standard_Dataset(X, y)
+    else:
+        return Standard_Dataset(X)
 
-with torch.no_grad():
-    for batch in vae_val_loader:
-        if isinstance(batch, (list, tuple)):
-            x_batch = batch[0]
-        else:
-            x_batch = batch
+# 6. LOOP: RECONSTRUCT EACH PATIENT SEPARATELY
+for patient_idx, patient_data in enumerate(list_ims_meta, start=1):
+    patient_ims = patient_data[0]
+    patient_meta = patient_data[1]
 
-        x_batch = x_batch.to(device=device, dtype=torch.float32)
-        batch_size = x_batch.shape[0]
+    patid = str(patient_meta["PatID"].iloc[0]) if len(patient_meta) > 0 else f"Unknown_{patient_idx}"
 
-        recon_batch, mu, logvar = model(x_batch)  #
-        # detach and move to CPU because of no gradients
-        # clamp is for valid image range
-        recon_batch = recon_batch.detach().cpu().clamp(0.0, 1.0)
+    print(f"\n=== Patient {patient_idx}: PatID {patid} ===")
+    print(f"  -> ims shape:  {patient_ims.shape}")
+    print(f"  -> meta shape: {patient_meta.shape}")
+    print(patient_meta.head())
 
-        # save each image in the batch
-        for i in range(batch_size):
-            idx = global_idx + i
-            if idx >= len(vae_val_meta):
-                continue
+    # ---- Build Dataset & Loader ----
+    vae_patient_ds = _to_dataset(patient_ims, patient_meta, with_labels=False)
+    vae_patient_loader = DataLoader(
+        vae_patient_ds,
+        batch_size=VAE_params['batch_size'],
+        shuffle=False
+    )
 
-            row = vae_val_meta.iloc[idx]
-            patid = str(row["PatID"])
-            filename = str(row["imfilename"])
+    # ---- Reconstruction Saving ----
+    total_images = len(patient_ims)
+    pbar = tqdm.tqdm(total=total_images, desc=f"Saving recon for PatID {patid}")
 
-            out_dir = os.path.join(RECON_DIR, f"VAE_Config{Config}", patid)  # change name if needed
-            os.makedirs(out_dir, exist_ok=True)
+    rows = []
+    global_idx = 0
 
-            # tensor to numpy array
-            img_tensor = recon_batch[i]  # (C, H, W)
-            # convert to (H, W, C) and scale to [0, 255]
-            img_np = (img_tensor.numpy().transpose(1, 2, 0) * 255.0).round().astype("uint8")
+    with torch.no_grad():
+        for batch in vae_patient_loader:
 
-            out_path = os.path.join(out_dir, filename)
-            try:
-                # create PIL image from the numpy array in RGB format
-                pil = Image.fromarray(img_np)
-                pil.save(out_path)
-            except Exception as e:
-                print(f"[Save Error] idx {idx} file {out_path}: {e}")
+            if isinstance(batch, (list, tuple)):
+                x_batch = batch[0]
+            else:
+                x_batch = batch
 
-        global_idx += batch_size
-        pbar.update(batch_size)
+            x_batch = x_batch.to(device, dtype=torch.float32)
+
+            # run VAE
+            recon_batch, mu, logvar = model(x_batch)
+            recon_batch = recon_batch.detach().cpu().clamp(0.0, 1.0)
+
+            batch_size = recon_batch.shape[0] # preguntar
+            # save each reconstruction
+            for i in range(batch_size):
+
+                if global_idx >= len(patient_meta):
+                    break
+
+                row = patient_meta.iloc[global_idx]
+                filename = str(row["imfilename"])
+
+                # images to arrays
+                orig_np = patient_ims[global_idx].astype(np.float32) / 255.0   # (H, W, 3)
+                recon_np = recon_batch[i].numpy().transpose(1, 2, 0)          # (H, W, 3), already [0,1]
+
+                row_metrics = {
+                    "PatID":       patid,
+                    "imfilename":  filename,
+                    "mse_rgb":     mse_rgb(orig_np, recon_np),
+                    "mse_red":     mse_red_masked(orig_np, recon_np),
+                }
+                rows.append(row_metrics)
+                global_idx += 1
+                pbar.update(1)
 
     pbar.close()
-    print("All VAE reconstructions saved to:", RECON_DIR)
+    df_patient = pd.DataFrame(rows)
+
+    # Folder for metrics (separate from images; we don't save PNGs anymore)
+    metrics_dir = os.path.join(RECON_DIR, f"VAE_pat_metrics{Config}", "metrics")
+    os.makedirs(metrics_dir, exist_ok=True)
+
+    csv_path = os.path.join(metrics_dir, f"{patid}.csv")
+    df_patient.to_csv(csv_path, index=False)
+
+    print(f"Finished saving reconstructions for PatID {patid}.")
+
+print("\nAll patient reconstructions saved successfully!")
+
+
+
