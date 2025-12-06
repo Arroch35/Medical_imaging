@@ -26,7 +26,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def load_autoencoder(autoencoder_path):
     inputmodule_paramsEnc = {"num_input_channels": 3}
-    net_paramsEnc, net_paramsDec, inputmodule_paramsDec = AEConfigs("1")
+    net_paramsEnc, net_paramsDec, inputmodule_paramsDec = AEConfigs("1", inputmodule_paramsEnc)
 
     ae = AutoEncoderCNN(
         inputmodule_paramsEnc,
@@ -102,7 +102,7 @@ def train_triplet_embedder(latents, labels, batch_size=64, epochs=30, lr=1e-3):
 
         print(f"Epoch {epoch+1}/{epochs} | Loss: {epoch_loss/len(loader):.4f}")
 
-    os.makedirs("/checkpoints/CL", exist_ok=True)
+    os.makedirs("checkpoints/CL", exist_ok=True)
     torch.save(embedder.state_dict(), "/checkpoints/CL/triplet_embedder_true_labels.pt")
     print("Saved triplet embedder → triplet_embedder.pt")
 
@@ -144,15 +144,18 @@ def run_training(autoencoder_path, threshold, use_pseudolabels=True):
     print("Train distribution:", np.bincount(y_train))
     print("Test distribution:", np.bincount(y_test))
 
+    print(lat_train.shape[1]) 
     # 5. Train triplet embedder on TRAIN only
     embedder = train_triplet_embedder(
         lat_train, y_train,
-        batch_size=32,
-        epochs=10,
+        batch_size=64,
+        epochs=30,
         lr=1e-3
     )
 
     return embedder, lat_train, y_train, lat_test, y_test
+
+
 
 embedder, lat_train, y_train, lat_test, y_test = run_training(
     autoencoder_path="checkpoints/AE_Config1.pth",

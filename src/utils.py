@@ -6,9 +6,8 @@ import os
 
 from Models.datasets import Standard_Dataset
 
-inputmodule_paramsEnc = {'num_input_channels': 3}
 
-def AEConfigs(Config):
+def AEConfigs(Config, inputmodule_paramsEnc):
     print(Config)
     net_paramsEnc={}
     net_paramsDec={}
@@ -216,6 +215,19 @@ def GetImagePaths(list_folders, n_images_per_folder=None, excelFile=None, verbos
         folder_name = os.path.basename(os.path.normpath(folder))
         patid = folder_name.split("_")[0]
         all_patids.add(patid)
+
+        # Exclude known contaminated patients
+        exclude_list = [
+        'B22-108', 'B22-112', 'B22-142', 'B22-143', 'B22-149', 'B22-150',
+        'B22-151', 'B22-152', 'B22-172', 'B22-270', 'B22-94', 'B22-93',
+        'B22-61', 'B22-53', 'B22-34', 'B22-284', 'B22-165', 'B22-187',
+        'B22-210', 'B22-90'
+        ]       
+        if patid in exclude_list:
+            skipped_patids.add(patid)
+            if verbose:
+                print(f"[GetImagePaths] Excluding flagged contaminated patient: {patid}")
+            continue
 
         if healthy_pats is not None and patid not in healthy_pats:
             skipped_patids.add(patid)

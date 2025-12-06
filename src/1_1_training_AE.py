@@ -167,3 +167,7 @@ if __name__ == "__main__":
 
 
 # ! Error: Ahora la loss es increiblemente grande!!!
+
+# TODO: Quitar normalización de las imágenes y el clamp
+
+# TODO: Con los últimos models aún me sale mal todo. Miara bien como lo ha hecho la jana, porque no es normal. Luego, cuando tenga algo bueno entrenado, usar el mejor para entrenar al enbeding CL, y despues al classifier

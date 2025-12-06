@@ -87,7 +87,7 @@ def save_all_latents_from_saved(
 # ----------------------------------------------------------
 if __name__ == "__main__":
     save_all_latents_from_saved(
-        embedder_weights="triplet_embedder.pt",
+        embedder_weights="checkpoints/CL/triplet_embedder.pt",
         latent_dir="data/latent_vectors",
         output_dir="../data/latent_outputs"
     )

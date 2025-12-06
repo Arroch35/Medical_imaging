@@ -22,7 +22,7 @@ def load_image_rgb(path):
     return np.array(img, dtype=np.float32)
 
 
-def load_pairs():
+def load_pairs(config):
     """
     Returns:
         originals, recons : list of HxWx3 float32 arrays
@@ -43,7 +43,7 @@ def load_pairs():
 
     originals, recons, filenames, labels = [], [], [], []
 
-    recon_root = os.path.join(RECON_DIR, "Config1")
+    recon_root = os.path.join(RECON_DIR, "manual_remove", config)
 
     # Build mapping: Pat_ID → list of annotated folders (with _0, _1...)
     annotated_subfolders = os.listdir(ANNOTATED_PATCHES_DIR)
@@ -121,7 +121,7 @@ def max_percentile(o, r, p=99):
     return np.percentile(sq_err, p)
 
 
-def mse_red(o, r):
+def mse_red(o, r): # Puede que esté mal
     # channel 0 = R
     return np.mean((o[..., 0] - r[..., 0]) ** 2)
 
@@ -133,8 +133,10 @@ def mse_hsv_value(o, r):
 
 def mse_hsv_hue(o, r):
     hsv_o = rgb_to_hsv(o)
-    hsv_r = rgb_to_hsv(r)
-    return np.mean((hsv_o[..., 0] - hsv_r[..., 0]) ** 2)  # H channel
+    hsv_r = rgb_to_hsv(r) 
+    dh = np.abs(hsv_o[...,0] - hsv_r[...,0]) # H channel 
+    dh = np.minimum(dh, 1.0 - dh)     # circular distance
+    return np.mean(dh**2)
 
 
 def compute_metrics(originals, recons, filenames):
@@ -242,18 +244,17 @@ def plot_10fold_roc(df, metric_name, labels_column="Presence"):
 
 if __name__ == "__main__":
 
-    originals, recons, filenames, labels = load_pairs()
-    print("Loaded pairs:", len(originals))
-    df = compute_metrics(originals, recons, filenames)
-    df["presence"] = labels
+    configs=["config1", "config2", "config3"]
+    for config in configs:
+        originals, recons, filenames, labels = load_pairs(config)
+        print("Loaded pairs:", len(originals))
+        df = compute_metrics(originals, recons, filenames)
+        df["presence"] = labels
 
-    # Save metrics per patch so you can analyse them later
-    df.to_csv("../data/reconstruction_metrics.csv", index=False)
+        # Save metrics per patch so you can analyse them later
+        df.to_csv("../data/manual_remove/"+config+"_reconstruction_metrics.csv", index=False)
 
     # Example: visualize top errors for each metric
     #show_top(originals, recons, filenames, df["mse_hsv_V"].values, "Value MSE HSV", TOP_N)
     #show_top(originals, recons, filenames, df["mse_rgb"].values,    "MSE RGB", TOP_N)
     #show_top(originals, recons, filenames, df["emr_dissim"].values, "EMR dissimilarity", TOP_N)
-
-
-#! Error: Sigo teniendo menos imágenes aquí, así que tendré que descubrir porque

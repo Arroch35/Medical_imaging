@@ -11,11 +11,11 @@ import pandas as pd
 
 from config import *
 
-METRICS = "../data/reconstruction_metrics.csv"
+
 SAVE_DIR = "../data/roc_curves"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-def plot_10fold_roc(df, metric_name, labels_column="Presence"):
+def plot_10fold_roc(df, metric_name, config, labels_column="Presence"):
     """
     df: dataframe with metrics + a binary labels column
     metric_name: column name of the metric for ROC curve
@@ -93,7 +93,9 @@ def plot_10fold_roc(df, metric_name, labels_column="Presence"):
     plt.grid(True)
 
     # Save ROC Figure
-    save_path = os.path.join(SAVE_DIR, f"ROC_{metric_name}.png")
+    config_save_roc_curves = SAVE_DIR+"/manual_remove/"+config
+    os.makedirs(config_save_roc_curves, exist_ok=True)
+    save_path = os.path.join(config_save_roc_curves, f"ROC_{metric_name}.png")
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
     plt.close()
@@ -105,33 +107,42 @@ def plot_10fold_roc(df, metric_name, labels_column="Presence"):
 
     return best_threshold_mean, best_threshold_std
 
+configs=["config1", "config2", "config3"]
+for config in configs:
+    metrics_path = "../data/manual_remove/"+config+"_reconstruction_metrics.csv"
 
-metrics = [
-    "emr_dissim",
-    "mse_rgb",
-    "max_p99",
-    "mse_red",
-    "mse_hsv_V",
-    "mse_hsv_H"
-    ]
+    metrics = [
+        "emr_dissim",
+        "mse_rgb",
+        "max_p99",
+        "mse_red",
+        "mse_hsv_V",
+        "mse_hsv_H"
+        ]
 
-reconstruction_metrics=pd.read_csv(METRICS)
-print(set(reconstruction_metrics["presence"]))
+    reconstruction_metrics=pd.read_csv(metrics_path)
+    print(set(reconstruction_metrics["presence"]))
 
-filtered_df = reconstruction_metrics[reconstruction_metrics['presence'] != 0]
+    filtered_df = reconstruction_metrics[reconstruction_metrics['presence'] != 0]
 
-results = []
+    results = []
 
-for m in metrics:
-    thr_mean, thr_std = plot_10fold_roc(filtered_df, m, labels_column="presence")
-    results.append({
-        "metric": m,
-        "best_threshold_mean": thr_mean,
-        "best_threshold_std": thr_std
-    })
+    for m in metrics:
+        thr_mean, thr_std = plot_10fold_roc(filtered_df, m, config, labels_column="presence")
+        results.append({
+            "metric": m,
+            "best_threshold_mean": thr_mean,
+            "best_threshold_std": thr_std
+        })
 
-# ---- Save thresholds ----
-thresholds_df = pd.DataFrame(results)
-thresholds_df.to_csv("../data/best_thresholds.csv", index=False)
+    # ---- Save thresholds ----
+    thresholds_df = pd.DataFrame(results)
+    thresholds_df.to_csv("../data/manual_remove/"+config+"_best_thresholds.csv", index=False)
 
-print(thresholds_df)
+    print(thresholds_df)
+
+
+    #TODO: 
+    # Si estas funcionan bien, hacer el 5 con estass, sino hacerlo con la config 3 de los entrenados anteriormente
+    # No han funcionado bien, pero la config 2 de esta en la roc curve de H es la mejor que tengo
+    # Valorar a ver cual de todas es la mejor y usarla para el paso 5 hasta el final TENDRÉ QUE CAMBIAR EL CONGIF 1 POR EL QUE TOQUE!!!
