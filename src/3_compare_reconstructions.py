@@ -14,7 +14,7 @@ from config2 import *
 TOP_N = 20
 SAVE_DIR = "../data/roc_curves"
 os.makedirs(SAVE_DIR, exist_ok=True)
-Config = "2"
+Config = "1"
 
 
 # loads an image and converts to RGB numpy array
@@ -48,7 +48,7 @@ def load_pairs():
     # -------------------------------
     # Load reconstructions depending on CONFIG
     # -------------------------------
-    recon_root = os.path.join(RECON_DIR, f"AE_Config{Config}")
+    recon_root = os.path.join(RECON_DIR, f"VAE_Config{Config}")
 
     # Build mapping: Pat_ID → multiple annotated folders (001_0, 001_1…)
     annotated_subfolders = os.listdir(ANNOTATED_PATCHES_DIR)
@@ -204,70 +204,6 @@ def show_top(originals, recons, filenames, scores, title, top_n=20):
 
 
 
-def plot_10fold_roc(df, metric_name, labels_column="Presence"):
-
-    SAVE_SUBDIR = os.path.join(SAVE_DIR, f"AE_Config{Config}")
-    os.makedirs(SAVE_SUBDIR, exist_ok=True)
-
-    y = df[labels_column].values
-    scores = df[metric_name].values
-
-    kf = KFold(n_splits=10, shuffle=True, random_state=42)
-
-    tprs = []
-    aucs = []
-    mean_fpr = np.linspace(0, 1, 200)
-
-    plt.figure(figsize=(7, 6))
-
-    for train_idx, test_idx in kf.split(scores):
-        y_true = y[test_idx]
-        y_score = scores[test_idx]
-
-        fpr, tpr, _ = roc_curve(y_true, y_score)
-        roc_auc = auc(fpr, tpr)
-        aucs.append(roc_auc)
-
-        interp_tpr = np.interp(mean_fpr, fpr, tpr)
-        interp_tpr[0] = 0.0
-        tprs.append(interp_tpr)
-
-        plt.plot(fpr, tpr, alpha=0.2, lw=1)
-
-    # Mean ROC
-    mean_tpr = np.mean(tprs, axis=0)
-    mean_tpr[-1] = 1.0
-    mean_auc = auc(mean_fpr, mean_tpr)
-    std_auc = np.std(aucs)
-
-    plt.plot(
-        mean_fpr,
-        mean_tpr,
-        color="blue",
-        lw=2.5,
-        label=f"Mean ROC (AUC = {mean_auc:.3f} ± {std_auc:.3f})"
-    )
-
-    # Std band
-    std_tpr = np.std(tprs, axis=0)
-    tpr_upper = np.minimum(mean_tpr + std_tpr, 1)
-    tpr_lower = np.maximum(mean_tpr - std_tpr, 0)
-    plt.fill_between(mean_fpr, tpr_lower, tpr_upper, color="blue", alpha=0.2)
-
-    plt.plot([0, 1], [0, 1], "k--", lw=1)
-
-    plt.title(f"10-fold ROC Curve — {metric_name}")
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.legend(loc="lower right")
-    plt.grid(True)
-    plt.tight_layout()
-
-    save_path = os.path.join(SAVE_SUBDIR, f"ROC_{metric_name}.png")
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-
-
 
 if __name__ == "__main__":
     originals, recons, filenames, labels = load_pairs()
@@ -278,22 +214,10 @@ if __name__ == "__main__":
     print(df.head())
 
     # Save metrics per patch so you can analyse them later
-    df.to_csv(f"ae_reconstruction_metrics{Config}.csv", index=False)
+    df.to_csv(f"reconstruction_metrics{Config}.csv", index=False)
     print("saved reconstruction_metrics.csv")
      # Example: visualize top errors for each metric
     # show_top(originals, recons, filenames, df["mse_hsv_V"].values, "Value MSE HSV", TOP_N)
     # show_top(originals, recons, filenames, df["mse_rgb"].values,    "MSE RGB", TOP_N)
     # show_top(originals, recons, filenames, df["emr_dissim"].values, "EMR dissimilarity", TOP_N)
     # get the df created with the metrics and do 10-fold ROC curves for each metric
-    df = pd.read_csv(f"reconstruction_metrics{Config}.csv")
-    metric_names = [
-        "emr_dissim",
-        "mse_rgb",
-        "max_p99",
-        "mse_red",
-        "mse_hsv_V",
-        "mse_hsv_H"
-    ]
-    for metric in metric_names:
-        plot_10fold_roc(df, metric_name=metric, labels_column="Presence")
-        print(f"Plotted ROC curve for {metric}")
