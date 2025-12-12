@@ -2,6 +2,7 @@ from sklearn.metrics import roc_curve
 from sklearn.model_selection import KFold
 import numpy as np
 import pandas as pd
+from pathlib import Path
 
 
 def get_optimal_thresholds(df, metric_name, labels_column="Presence"):
@@ -40,9 +41,10 @@ def get_optimal_thresholds(df, metric_name, labels_column="Presence"):
 
 
 #get reconstruction csv
-Config = '3'
-reconstruction_df = pd.read_csv(f"reconstruction_metrics{Config}.csv")
+Config = '1'
+reconstruction_df = pd.read_csv(f"reconstructions/reconstruction_metrics{Config}.csv")
 thresholds_mse_red = get_optimal_thresholds(reconstruction_df, "mse_red")
 print(thresholds_mse_red)
 
-thresholds_mse_red.to_csv(f"optimal_thresholds_mse_red_Config{Config}.csv", index=False)
+Path('thresholds').mkdir(exist_ok=True)
+thresholds_mse_red.to_csv(f"thresholds/optimal_thresholds_mse_red_Config{Config}.csv", index=False)

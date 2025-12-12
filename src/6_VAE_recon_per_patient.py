@@ -14,7 +14,27 @@ from Models.AEmodels import VAECNN
 from Models.datasets import Standard_Dataset
 from utils import *
 from config2 import *
-from compare_reconstructions import *
+
+
+def mse_rgb(o, r):
+    return np.mean((o - r) ** 2)
+
+
+def mse_red_masked(o, r, red_thresh=0.4):
+    # o, r expected in [0, 1]
+    red = o[..., 0]
+    green = o[..., 1]
+    blue = o[..., 2]
+
+    # Simple heuristic: red dominant over G/B and sufficiently strong
+    red_mask = (red > red_thresh) & (red > green + 0.05) & (red > blue + 0.05)
+
+    if not np.any(red_mask):
+        # no red pixels in original – define metric as 0 or np.nan
+        return 0.0
+
+    diff = o[..., 0] - r[..., 0]
+    return np.mean(diff[red_mask] ** 2)
 
 torch.backends.cudnn.benchmark = True
 

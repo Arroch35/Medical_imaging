@@ -11,7 +11,7 @@ from config2 import *
 
 PATIENT_COL = "CODI"
 DENSITAT_COL = "DENSITAT"
-PRED_COL = "all 10fold pred"       # column in each *_predicted.csv
+PRED_COL = "all 10fold pred"
 SAVE_DIR = "../data/roc_curves_patients"
 os.makedirs(SAVE_DIR, exist_ok=True)
 Config = "1"
@@ -24,15 +24,15 @@ def load_patient_labels(
 ):
     """
     Load PatientDiagnosis.csv and convert 'densitat' text labels to numeric:
-      negativa   -> -1
-      alta/baixa ->  1
+      negativa = -1
+      alta/baixa =  1
 
-    Returns a DataFrame with columns:
+    Returns a DF:
       [patient_id_col, densitat_col, 'densitat_int']
     """
     df = pd.read_csv(patient_diagnosis_dir)
 
-    # Map to numeric. You can extend this dict if you have more variations.
+    # to chang the text labels to numeric
     mapping = {
         "NEGATIVA": -1,
         "ALTA": 1,
@@ -41,7 +41,7 @@ def load_patient_labels(
 
     df["densitat_int"] = df[densitat_col].map(mapping)
 
-    # Optional: check if there are unmapped values
+    # null check
     if df["densitat_int"].isna().any():
         print("Warning: some 'densitat' values could not be mapped to -1/1:")
         print(df[df["densitat_int"].isna()][[patient_id_col, densitat_col]])
@@ -54,11 +54,11 @@ def compute_patient_percent_positive(
     pred_col,
 ):
     """
-    For each patient CSV in patient_predictions_dir (e.g. B22-25_predicted.csv):
+    For each patient:
       - read column pred_col (values -1 or 1)
       - compute percentage of positive (==1)
 
-    Returns DataFrame with columns:
+    Returns DF:
       ['patient_id', 'percent_positive']
     """
     rows = []
@@ -67,7 +67,6 @@ def compute_patient_percent_positive(
     for filepath in glob.glob(pattern):
         filename = os.path.basename(filepath)
 
-        # Example: B22-25_predicted.csv -> B22-25
         patient_id = filename.replace("_predicted.csv", "")
 
         df_pred = pd.read_csv(filepath)
@@ -76,7 +75,7 @@ def compute_patient_percent_positive(
 
         preds = df_pred[pred_col].values
 
-        # Assuming +1 is the "positive" prediction (alta/baixa)
+        # calculate percentage of positives
         percent_pos = np.mean(preds == 1)
 
         rows.append({
@@ -95,11 +94,7 @@ def build_patient_level_df(
     densitat_col=DENSITAT_COL,
 ):
     """
-    1) Load numeric labels from PatientDiagnosis.csv
-    2) Compute % positives per patient from *_predicted.csv
-    3) Merge them together on patient ID
-
-    Returns DataFrame with columns:
+    Returns DF merged:
       [patient_id_col, 'percent_positive', densitat_col, 'densitat_int']
     """
     labels_df = load_patient_labels(
@@ -110,8 +105,6 @@ def build_patient_level_df(
 
     scores_df = compute_patient_percent_positive(patient_predictions_dir=preds_dir, pred_col=PRED_COL)
 
-    # Align column names for merge:
-    # scores_df has 'patient_id'; in diagnosis we have patient_id_col.
     scores_df_renamed = scores_df.rename(columns={"CODI": patient_id_col})
 
     merged = pd.merge(
@@ -121,9 +114,9 @@ def build_patient_level_df(
         how="inner",
     )
 
-    # Optional: save intermediate percentages if you want
-    merged.to_csv(os.path.join(SAVE_DIR, "patient_level_scores_and_labels.csv"),
-                  index=False)
+    Path('patient_diag_percentage').mkdir(exist_ok=True)
+
+    merged.to_csv("patient_diag_percentage/patient_level_scores_and_labels.csv", index=False)
 
     return merged
 
@@ -159,7 +152,6 @@ def plot_10fold_roc_patients(
         y_true = y[test_idx]
         y_score = scores[test_idx]
 
-        # sklearn will treat the larger label as "positive" (here: 1)
         fpr, tpr, _ = roc_curve(y_true, y_score)
         roc_auc = auc(fpr, tpr)
         aucs.append(roc_auc)
@@ -209,16 +201,15 @@ def get_optimal_thresholds_patients(
     df,
     metric_name="percent_positive",
     labels_column="densitat_int",
-    save_dir=SAVE_DIR,
-    filename="optimal_thresholds_patients.csv",
+    filename=f"optimal_thresholds_patients_VAE_Config{Config}.csv",
 ):
     """
-    For each of the 10 folds:
-      - build ROC on that fold
-      - compute Youden's J = TPR - FPR
-      - pick the threshold that maximizes J
+    10 folds, loop:
+    build ROC on that fold
+    compute Youden's J = TPR - FPR
+    pick the threshold that maximizes J
 
-    Saves a CSV with columns:
+    Saves CSV:
       [fold, best_threshold, best_tpr, best_fpr, youden_J]
     """
     y = df[labels_column].values
@@ -246,17 +237,16 @@ def get_optimal_thresholds_patients(
         })
 
     df_thresh = pd.DataFrame(results)
+    Path('thresholds').mkdir(exist_ok=True)
 
-    os.makedirs(save_dir, exist_ok=True)
-    out_path = os.path.join(save_dir, filename)
-    df_thresh.to_csv(out_path, index=False)
+    df_thresh.to_csv(f"thresholds/{filename}", index=False)
 
-    print(f"Optimal thresholds saved to: {out_path}")
+    print(f"Optimal thresholds saved")
     return df_thresh
 
 
 if __name__ == "__main__":
-    pred_dir = "C:/Users/janaz/Documents/uni/YEAR 4 - S1/vision and learning/Patient_Classfication/VAE_Config1"
+    pred_dir = CLASSFICATION_DIR / f"VAE_Config{Config}"
     df_roc = build_patient_level_df(pred_dir,PATIENT_DIAGNOSIS_FILE, PATIENT_COL, DENSITAT_COL)
     print(df_roc.head(10))
     plot_10fold_roc_patients(
@@ -264,14 +254,12 @@ if __name__ == "__main__":
         metric_name="percent_positive",
         labels_column="densitat_int",
         save_dir=SAVE_DIR,
-        curve_name="Patient_Level_VAE_Config1",
+        curve_name=f"Patient_Level_VAE_Config{Config}",
     )
 
     get_optimal_thresholds_patients(
         df_roc,
         metric_name="percent_positive",
         labels_column="densitat_int",
-        save_dir=SAVE_DIR,
-        filename="optimal_thresholds_patients_VAE_Config1.csv",
     )
 

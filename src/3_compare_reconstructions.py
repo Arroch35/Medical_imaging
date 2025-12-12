@@ -12,8 +12,6 @@ import pandas as pd
 from config2 import *
 
 TOP_N = 20
-SAVE_DIR = "../data/roc_curves"
-os.makedirs(SAVE_DIR, exist_ok=True)
 Config = "1"
 
 
@@ -213,8 +211,10 @@ if __name__ == "__main__":
     df["Presence"] = labels
     print(df.head())
 
+    Path('reconstructions').mkdir(exist_ok=True)
+
     # Save metrics per patch so you can analyse them later
-    df.to_csv(f"reconstruction_metrics{Config}.csv", index=False)
+    df.to_csv(f"reconstructions/reconstruction_metrics{Config}.csv", index=False)
     print("saved reconstruction_metrics.csv")
      # Example: visualize top errors for each metric
     # show_top(originals, recons, filenames, df["mse_hsv_V"].values, "Value MSE HSV", TOP_N)

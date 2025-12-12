@@ -14,10 +14,10 @@ def apply_thresholds_to_patient(
     opt_df = pd.read_csv(thresholds_csv_path)
     thresholds = dict(zip(opt_df["fold"], opt_df["best_threshold"]))
 
-    # Load patient data
+    # patient diagnosis csv
     df = pd.read_csv(patient_csv_path)
 
-    # Build prediction dataframe
+    # new prediction dataframe
     pred_df = pd.DataFrame()
     pred_df[id_col] = df[id_col]
 
@@ -30,11 +30,11 @@ def apply_thresholds_to_patient(
     fold_cols = [c for c in pred_df.columns if c.startswith("fold")]
     vote_sum = pred_df[fold_cols].sum(axis=1)  # sum of -1/1 over folds
 
-    # Majority voting: >0 ⇒ 1, else ⇒ -1
+    # majority voting
     pred_df["all 10fold pred"] = (vote_sum > 0).astype(int)
     pred_df["all 10fold pred"] = pred_df["all 10fold pred"].replace({0: -1})
 
-    # Name output file after patient ID
+    # save the csv
     patient_id = str(df[patid_col].iloc[0])
     csv_dir = os.path.join(CLASSFICATION_DIR, f"VAE_Config{Config}")
     os.makedirs(csv_dir, exist_ok=True)
@@ -45,12 +45,9 @@ def apply_thresholds_to_patient(
     return out_path, patient_id
 
 
-# -------------------------
-# 🚀 LOOP THROUGH METRICS FOLDER
-# -------------------------
 Config = '1'
-#load csv thresholds
-thresholds = f'optimal_thresholds_mse_red_Config{Config}.csv'
+# load csv thresholds
+thresholds = f'thresholds/optimal_thresholds_mse_red_Config{Config}.csv'
 
 patients_folder = 'C:/Users/janaz/Documents/uni/YEAR 4 - S1/vision and learning/Reconstructions/VAE_pat_metrics1/metrics'
 all_csvs = [f for f in os.listdir(patients_folder) if f.endswith(".csv")]
@@ -59,7 +56,7 @@ for csv_file in all_csvs:
 
     csv_path = os.path.join(patients_folder, csv_file)
 
-    # Skip threshold CSV or already-generated predicted CSVs
+    # check to not process thresholds or already predicted files
     if "optimal_thresholds" in csv_file:
         continue
     if csv_file.endswith("_predicted_presence.csv"):
