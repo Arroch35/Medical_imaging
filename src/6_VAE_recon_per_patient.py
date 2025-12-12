@@ -38,7 +38,7 @@ def mse_red_masked(o, r, red_thresh=0.4):
 
 torch.backends.cudnn.benchmark = True
 
-Config = '1'
+Config = '3'
 
 def VAEConfigs(Config):
     inputmodule_paramsEnc = {'dim_input': 256, 'num_input_channels': 3}
@@ -229,7 +229,7 @@ for patient_idx, patient_data in enumerate(list_ims_meta, start=1):
     df_patient = pd.DataFrame(rows)
 
     # Folder for metrics (separate from images; we don't save PNGs anymore)
-    metrics_dir = os.path.join(RECON_DIR, f"VAE_pat_metrics{Config}", "metrics")
+    metrics_dir = os.path.join(RECON_DIR, f"VAE_pat_metrics{Config}")
     os.makedirs(metrics_dir, exist_ok=True)
 
     csv_path = os.path.join(metrics_dir, f"{patid}.csv")

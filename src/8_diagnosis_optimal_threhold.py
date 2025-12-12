@@ -14,7 +14,7 @@ DENSITAT_COL = "DENSITAT"
 PRED_COL = "all 10fold pred"
 SAVE_DIR = "../data/roc_curves_patients"
 os.makedirs(SAVE_DIR, exist_ok=True)
-Config = "1"
+Config = '3'
 
 
 def load_patient_labels(

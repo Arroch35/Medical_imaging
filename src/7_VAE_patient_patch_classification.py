@@ -45,11 +45,11 @@ def apply_thresholds_to_patient(
     return out_path, patient_id
 
 
-Config = '1'
+Config = '3'
 # load csv thresholds
 thresholds = f'thresholds/optimal_thresholds_mse_red_Config{Config}.csv'
 
-patients_folder = 'C:/Users/janaz/Documents/uni/YEAR 4 - S1/vision and learning/Reconstructions/VAE_pat_metrics1/metrics'
+patients_folder = f'C:/Users/janaz/Documents/uni/YEAR 4 - S1/vision and learning/Reconstructions/VAE_pat_metrics{Config}'
 all_csvs = [f for f in os.listdir(patients_folder) if f.endswith(".csv")]
 
 for csv_file in all_csvs:

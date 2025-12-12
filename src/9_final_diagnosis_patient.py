@@ -9,7 +9,7 @@ from pathlib import Path
 PATIENT_ID_COL_DIAG = "CODI"     # same as before
 SCORE_COL = "percent_positive"        # from previous step
 LABEL_COL = "densitat_int"            # numeric ground truth (-1 / 1)
-Config = '1'
+Config = '3'
 
 SAVE_DIR = "../data/confusion_matrices"
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -33,10 +33,13 @@ def classify_patients_for_threshold(df_patient, threshold,
     return preds
 
 
-def plot_and_save_confusion_matrix(cm, labels, title, save_path, cmap="Blues"):
+def plot_and_save_confusion_matrix(fold, cm, labels, title, cmap="Blues"):
     """
     Plots a labeled confusion matrix and saves it.
     """
+    SAVE_SUBDIR = os.path.join(SAVE_DIR, f"VAE_Config{Config}")
+    os.makedirs(SAVE_SUBDIR, exist_ok=True)
+
     fig, ax = plt.subplots(figsize=(5, 4))
 
     im = ax.imshow(cm, interpolation="nearest", cmap=cmap)
@@ -66,6 +69,7 @@ def plot_and_save_confusion_matrix(cm, labels, title, save_path, cmap="Blues"):
             )
 
     fig.tight_layout()
+    save_path = os.path.join(SAVE_SUBDIR, f"confusion_matrix_fold{fold}.png")
     plt.savefig(save_path, dpi=300)
     plt.close()
     print(f"[Saved] Confusion matrix → {save_path}")
@@ -110,12 +114,11 @@ def evaluate_thresholds_on_all_patients(
 
         cm = confusion_matrix(y_true, y_pred, labels=[-1, 1])
 
-        cm_save_path = os.path.join(SAVE_DIR, f"confusion_matrix_fold{fold}.png")
         plot_and_save_confusion_matrix(
-            cm,
+            fold=fold,
+            cm=cm,
             labels=["Negatiu (-1)", "Positiu (1)"],
             title=f"Confusion Matrix — Fold {fold}",
-            save_path=cm_save_path
         )
 
         #          pred=-1  pred=1
@@ -145,12 +148,12 @@ def evaluate_thresholds_on_all_patients(
 
     # Save predictions for all thresholds
     Path('patient_final_diagnosis').mkdir(exist_ok=True)
-    preds_df.to_csv(f"patient_final_diagnosis/patient_preds_on_thresholds{Config}.csv", index=False)
+    preds_df.to_csv(f"patient_final_diagnosis/patient_preds_on_thresholds_Config{Config}.csv", index=False)
     print(f"Per-patient predictions for all thresholds saved to: /patient_final_diagnosis")
 
     # Save metrics per threshold
     metrics_df = pd.DataFrame(metrics_rows)
-    metrics_df.to_csv(f"patient_final_diagnosis/thresholds_patient_level_performance{Config}.csv", index=False)
+    metrics_df.to_csv(f"patient_final_diagnosis/thresholds_patient_level_performance_Config{Config}.csv", index=False)
     print(f"Metrics per threshold saved to: /patient_final_diagnosis")
 
     return preds_df, metrics_df
@@ -168,3 +171,4 @@ if __name__ == "__main__":
         df_patient,
         thresholds_df,
     )
+
