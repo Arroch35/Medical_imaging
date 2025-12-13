@@ -54,7 +54,7 @@ from Models.AEmodels import AutoEncoderCNN
 from Models.datasets import Standard_Dataset, OnTheFlyImageDataset
 
 
-from config import CROPPED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE
+from config2 import CROPPED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE
 from utils import *
 
 import wandb
@@ -63,11 +63,11 @@ import os
 if __name__ == "__main__":
     # 0.1 AE PARAMETERS
     inputmodule_paramsEnc={}
-    inputmodule_paramsEnc['num_input_channels']=3
+    inputmodule_paramsEnc['num_input_channels']=1 #3
 
     # 0.1 NETWORK TRAINING PARAMS
     AE_params = {
-        'epochs': 30,
+        'epochs': 20,
         'batch_size': 128,
         'lr': 1e-3,
         'weight_decay': 1e-5,
@@ -82,22 +82,18 @@ if __name__ == "__main__":
 
     print("Loading images")
 
-    training_metadata = GetImagePaths(list_folders=crossval_cropped_folders, n_images_per_folder=100,
+    training_metadata = GetImagePaths(list_folders=crossval_cropped_folders, n_images_per_folder=330,
                                     excelFile=PATIENT_DIAGNOSIS_FILE)
-    print(training_metadata["path"][0])
+
 
     #### 3. lOAD PATCHES
 
     print("dataset")
     ae_training_dataset=OnTheFlyImageDataset(training_metadata)
     print("dataloader")
-    ae_train_loader = DataLoader(ae_training_dataset, batch_size=AE_params['batch_size'], num_workers=4, shuffle=True)
+    ae_train_loader = DataLoader(ae_training_dataset, batch_size=AE_params['batch_size'], shuffle=True)
 
-
-    print(next(iter(ae_training_dataset)))
-    print(next(iter(ae_train_loader)))
-
-    # ### 4. AE TRAINING
+    ### 4. AE TRAINING
 
     configs_to_run = ['1', '2', '3']
     print(AE_params['device'])
@@ -147,14 +143,14 @@ if __name__ == "__main__":
                 epoch_loss += loss.item() * x.size(0)
             epoch_loss /= len(training_metadata)
 
-            if (epoch + 1) % 10 == 0 or epoch == 0:
-                print(f"[AE Config {Config}][Epoch {epoch+1}/{config_wandb.epochs}] loss={epoch_loss:.5f}")
+            #if (epoch + 1) % 10 == 0 or epoch == 0:
+            print(f"[AE Config {Config}][Epoch {epoch+1}/{config_wandb.epochs}] loss={epoch_loss:.5f}")
 
             wandb.log({"train_loss": epoch_loss, "epoch": epoch+1})
 
         # Save model checkpoint
         Path('checkpoints').mkdir(exist_ok=True)
-        checkpoint_path = f'checkpoints/fakeAE_Config{Config}.pth'
+        checkpoint_path = f'checkpoints/AE_Config{Config}.pth'
         torch.save(model.state_dict(), checkpoint_path)
         print(f"Saved model for Config {Config} at {checkpoint_path}")
 
@@ -164,10 +160,3 @@ if __name__ == "__main__":
         gc.collect()
 
         wandb.finish()
-
-
-# ! Error: Ahora la loss es increiblemente grande!!!
-
-# TODO: Quitar normalización de las imágenes y el clamp
-
-# TODO: Con los últimos models aún me sale mal todo. Miara bien como lo ha hecho la jana, porque no es normal. Luego, cuando tenga algo bueno entrenado, usar el mejor para entrenar al enbeding CL, y despues al classifier

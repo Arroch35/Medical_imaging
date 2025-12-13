@@ -5,7 +5,7 @@ from config import PATIENT_DIAGNOSIS_FILE
 
 def create_patient_splits(
         patient_csv_path,
-        output_dir="../data/patient_diagnosis",
+        output_dir="data/patient_diagnosis",
         test_size=0.2,
         random_state=42
     ):
@@ -24,9 +24,15 @@ def create_patient_splits(
         output_dir/train_patients.csv
         output_dir/eval_patients.csv
     """
-
+    exclude_list = [
+        'B22-108', 'B22-112', 'B22-142', 'B22-143', 'B22-149', 'B22-150',
+        'B22-151', 'B22-152', 'B22-172', 'B22-270', 'B22-94', 'B22-93',
+        'B22-61', 'B22-53', 'B22-34', 'B22-284', 'B22-165', 'B22-187',
+        'B22-210', 'B22-90'
+    ] 
     # --- Load patient diagnosis file ---
     df = pd.read_csv(patient_csv_path)
+    df.drop(df[df['CODI'].isin(exclude_list)].index, inplace=True)
 
     # --- Check for necessary columns ---
     if not {"CODI", "DENSITAT"}.issubset(df.columns):

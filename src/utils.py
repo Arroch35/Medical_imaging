@@ -215,7 +215,7 @@ def GetImagePaths(list_folders, n_images_per_folder=None, excelFile=None, verbos
         folder_name = os.path.basename(os.path.normpath(folder))
         patid = folder_name.split("_")[0]
         all_patids.add(patid)
-
+        
         # Exclude known contaminated patients
         exclude_list = [
         'B22-108', 'B22-112', 'B22-142', 'B22-143', 'B22-149', 'B22-150',

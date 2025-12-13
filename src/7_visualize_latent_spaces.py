@@ -6,13 +6,13 @@ from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler
 from config import DATA_DIR
 
-PLOT_DIR = DATA_DIR / "plots_latent_space"
+PLOT_DIR = "data/plots_latent_space"
 os.makedirs(PLOT_DIR, exist_ok=True)
 
 def visualize_latent_spaces(old_latents, new_latents, labels, title_suffix=""):
     """
     Visualize original and triplet-learned latent spaces using t-SNE
-    and save the output plots to ../data/plots_latent_space.
+    and save the output plots to data/plots_latent_space.
     """
 
     # Normalize
@@ -58,7 +58,7 @@ def visualize_latent_spaces(old_latents, new_latents, labels, title_suffix=""):
     # ---------- SAVE PLOT ----------
     suffix_clean = title_suffix.replace("(", "").replace(")", "").replace(" ", "_")
     filename = f"latent_space_{suffix_clean}.png"
-    save_path = PLOT_DIR / filename
+    save_path = PLOT_DIR +"/last/"+ filename
     plt.savefig(save_path, dpi=300)
     print(f"Saved plot → {save_path}")
 
@@ -68,17 +68,17 @@ def visualize_latent_spaces(old_latents, new_latents, labels, title_suffix=""):
 # -------------------------------------------------
 # Load train and test latent vectors + labels
 # -------------------------------------------------
-latent_dir = DATA_DIR / "latent_outputs"
+latent_dir = "data/latent_outputs"
 
 # Train split
-old_lat_train = np.load(latent_dir / "train_old_latents.npy")
-new_lat_train = np.load(latent_dir / "train_new_latents.npy")
-y_train = np.load(latent_dir / "train_old_labels.npy")  # same for new
+old_lat_train = np.load(latent_dir +"/train_old_latents.npy") #train_old_latents.npy train_oldsemi_hard_latents
+new_lat_train = np.load(latent_dir +"/train_new_latents.npy") #train_new_latents.npy train_newsemi_hard_latents
+y_train = np.load(latent_dir +"/train_old_labels.npy")  #train_old_labels.npy train_newsemi_hard_labels
 
 # Test split
-old_lat_test = np.load(latent_dir / "test_old_latents.npy")
-new_lat_test = np.load(latent_dir / "test_new_latents.npy")
-y_test = np.load(latent_dir / "test_old_labels.npy")
+old_lat_test = np.load(latent_dir +"/test_old_latents.npy") #test_old_latents.npy test_oldsemi_hard_latents
+new_lat_test = np.load(latent_dir +"/test_new_latents.npy") #test_new_latents.npy test_newsemi_hard_latents
+y_test = np.load(latent_dir +"/test_old_labels.npy") #test_old_labels.npy test_oldsemi_hard_labels
 
 # -------------------------------------------------
 # Visualize
@@ -88,8 +88,3 @@ visualize_latent_spaces(old_lat_train, new_lat_train, y_train, title_suffix="Tra
 
 print("Visualizing TEST split...")
 visualize_latent_spaces(old_lat_test, new_lat_test, y_test, title_suffix="Test")
-
-# todo: cambiar los string paths paths del config file
-# poner a entrenar el cl model, que ha dado error en el cluster
-# Cambiar las cosas que pone de cpu a gpu
-# Probar los AE entrenados nuevos

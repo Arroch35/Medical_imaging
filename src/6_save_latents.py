@@ -5,7 +5,7 @@ import torch
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 
-from Models.TripletModels import Embedder
+from Models.TripletModels import Embedder, EmbedderLarge
 from utils import *
 from config import *
 
@@ -42,13 +42,13 @@ def save_latents(np_array, labels, save_path_prefix):
 # ----------------------------------------------------------
 def save_all_latents_from_saved(
     embedder_weights,
-    latent_dir="../data/latent_vectors",
-    output_dir="../data/latent_outputs"
+    latent_dir="data/latent_vectors",
+    output_dir="data/latent_outputs"
 ):
     os.makedirs(output_dir, exist_ok=True)
 
     # Load triplet embedder
-    embedder = Embedder(input_dim=64*64*64).to(device)  
+    embedder = EmbedderLarge(input_dim=2048).to(device)  #64*64*64
     embedder.load_state_dict(torch.load(embedder_weights, map_location=device))
     embedder.eval()
 
@@ -87,7 +87,7 @@ def save_all_latents_from_saved(
 # ----------------------------------------------------------
 if __name__ == "__main__":
     save_all_latents_from_saved(
-        embedder_weights="checkpoints/CL/triplet_embedder.pt",
+        embedder_weights="checkpoints/CL/embedder_triplet_best.pt", #"checkpoints/CL/triplet_embedder_true_labels.pt",
         latent_dir="data/latent_vectors",
-        output_dir="../data/latent_outputs"
+        output_dir="data/latent_outputs"
     )
