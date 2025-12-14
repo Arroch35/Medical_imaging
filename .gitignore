@@ -206,6 +206,8 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+checkpoints/
 
-# Data
-data/
+src/ConfigConfig1_training_losses_log.png
+src/ConfigConfig2_training_losses_log.png
+src/ConfigConfig3_training_losses_log.png

@@ -217,6 +217,8 @@ if __name__ == "__main__":
     df.to_csv(f"reconstructions/reconstruction_metrics{Config}.csv", index=False)
     print("saved reconstruction_metrics.csv")
      # Example: visualize top errors for each metric
+    show_top(originals, recons, filenames, df["mse_red"].values, "MSE Red Channel (masked)", TOP_N)
+
     # show_top(originals, recons, filenames, df["mse_hsv_V"].values, "Value MSE HSV", TOP_N)
     # show_top(originals, recons, filenames, df["mse_rgb"].values,    "MSE RGB", TOP_N)
     # show_top(originals, recons, filenames, df["emr_dissim"].values, "EMR dissimilarity", TOP_N)

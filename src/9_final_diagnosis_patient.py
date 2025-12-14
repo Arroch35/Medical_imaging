@@ -26,7 +26,7 @@ def load_thresholds_df(path=None):
     return df
 
 
-# classify patients for a threshold
+# classify patients for a threshold REVISAR
 def classify_patients_for_threshold(df_patient, threshold,
                                     score_col=SCORE_COL):
     preds = np.where(df_patient[score_col].values >= threshold, 1, -1)

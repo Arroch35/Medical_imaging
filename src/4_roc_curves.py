@@ -77,7 +77,7 @@ def plot_10fold_roc(df, metric_name, labels_column="Presence"):
 
 
 if __name__ == "__main__":
-    df = pd.read_csv(f"reconstruction_metrics{Config}.csv")
+    df = pd.read_csv(f"reconstructions/reconstruction_metrics{Config}.csv")
     metric_names = [
         "emr_dissim",
         "mse_rgb",
