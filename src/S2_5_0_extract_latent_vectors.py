@@ -9,7 +9,7 @@ from PIL import Image
 
 from utils import *
 from Models.AEmodels import AutoEncoderCNN, AEWithLatent
-from config2 import (
+from config import (
     ANNOTATED_PATCHES_DIR,
     PATIENT_DIAGNOSIS_FILE,
     ANNOTATED_METADATA_FILE,
@@ -115,7 +115,7 @@ def extract_and_save_latents(autoencoder_path, threshold=None, use_pseudolabels=
     lat_test,  lab_test  = latents[idx_test],  labels[idx_test]
 
     # 5. Save latents
-    out_dir = "data/latent_vectors"
+    out_dir = "../data/latent_vectors"
     os.makedirs(out_dir, exist_ok=True)
 
     np.savez(os.path.join(out_dir, "train_latents_labels_no_cl_no_pca.npz"),

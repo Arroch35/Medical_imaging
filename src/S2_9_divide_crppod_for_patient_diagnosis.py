@@ -5,7 +5,7 @@ from config import PATIENT_DIAGNOSIS_FILE
 
 def create_patient_splits(
         patient_csv_path,
-        output_dir="data/patient_diagnosis",
+        output_dir="../data/patient_diagnosis",
         test_size=0.2,
         random_state=42
     ):

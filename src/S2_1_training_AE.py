@@ -54,7 +54,7 @@ from Models.AEmodels import AutoEncoderCNN
 from Models.datasets import Standard_Dataset, OnTheFlyImageDataset
 
 
-from config2 import CROPPED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE
+from config import CROPPED_PATCHES_DIR, PATIENT_DIAGNOSIS_FILE
 from utils import *
 
 import wandb

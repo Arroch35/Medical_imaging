@@ -16,11 +16,11 @@ import os
 # ------------------------------------------------------------
 # Load TRAIN + TEST latents
 # ------------------------------------------------------------
-X_train = np.load("data/latent_outputs/train_new_latents.npy")
-X_test  = np.load("data/latent_outputs/test_new_latents.npy")
+X_train = np.load("../data/latent_outputs/train_new_latents.npy")
+X_test  = np.load("../data/latent_outputs/test_new_latents.npy")
 
-y_train = np.load("data/latent_outputs/train_new_labels.npy")
-y_test  = np.load("data/latent_outputs/test_new_labels.npy")
+y_train = np.load("../data/latent_outputs/train_new_labels.npy")
+y_test  = np.load("../data/latent_outputs/test_new_labels.npy")
 
 #X_train = train["latents"]
 #y_train = train["labels"]
@@ -45,7 +45,7 @@ X_test_scaled  = scaler.transform(X_test)
 
 kf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
 
-out_dir = "data/svm"
+out_dir = "../data/svm"
 os.makedirs(out_dir, exist_ok=True)
 
 # Store metrics for CSV

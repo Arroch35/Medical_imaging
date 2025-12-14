@@ -244,7 +244,7 @@ def plot_10fold_roc(df, metric_name, labels_column="Presence"):
 
 if __name__ == "__main__":
 
-    configs=["config1", "config2", "config3"]
+    configs=["config1", "config", "config3"]
     for config in configs:
         originals, recons, filenames, labels = load_pairs(config)
         print("Loaded pairs:", len(originals))

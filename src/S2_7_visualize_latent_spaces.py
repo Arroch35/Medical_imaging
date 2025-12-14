@@ -6,7 +6,7 @@ from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler
 from config import DATA_DIR
 
-PLOT_DIR = "data/plots_latent_space"
+PLOT_DIR = "../data/plots_latent_space"
 os.makedirs(PLOT_DIR, exist_ok=True)
 
 def visualize_latent_spaces(old_latents, new_latents, labels, title_suffix=""):
@@ -68,7 +68,7 @@ def visualize_latent_spaces(old_latents, new_latents, labels, title_suffix=""):
 # -------------------------------------------------
 # Load train and test latent vectors + labels
 # -------------------------------------------------
-latent_dir = "data/latent_outputs"
+latent_dir = "../data/latent_outputs"
 
 # Train split
 old_lat_train = np.load(latent_dir +"/train_old_latents.npy") #train_old_latents.npy train_oldsemi_hard_latents

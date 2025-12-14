@@ -18,15 +18,15 @@ import gc
 # ---------------------------
 # Config (adjust if needed)
 # ---------------------------
-PAT_SPLIT_CSV = "data/patient_diagnosis/train_patients.csv"
-SVM_METRICS_CSV = "data/svm/svm_kernel_metrics.csv"
+PAT_SPLIT_CSV = "../data/patient_diagnosis/train_patients.csv"
+SVM_METRICS_CSV = "../data/svm/svm_kernel_metrics.csv"
 AE_WEIGHTS = "checkpoints/manual_removed/AE_Config1.pth"
 EMBEDDER_WEIGHTS = "checkpoints/CL/embedder_triplet_best.pt"
 PCA_PATH = "checkpoints/CL/pca_reducer.joblib"
-SVM_MODEL = "data/svm/best_svm.pkl"
-SCALER_PATH = "data/svm/scaler.pkl"
+SVM_MODEL = "../data/svm/best_svm.pkl"
+SCALER_PATH = "../data/svm/scaler.pkl"
 
-OUT_DIR = "data/patient_diagnosis"
+OUT_DIR = "../data/patient_diagnosis"
 N_FOLDS = 10
 IMG_BATCH = 64
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"

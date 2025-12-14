@@ -107,7 +107,7 @@ def plot_10fold_roc(df, metric_name, config, labels_column="Presence"):
 
     return best_threshold_mean, best_threshold_std
 
-configs=["config1", "config2", "config3"]
+configs=["config1", "config", "config3"]
 for config in configs:
     metrics_path = "../data/manual_remove/"+config+"_reconstruction_metrics.csv"
 

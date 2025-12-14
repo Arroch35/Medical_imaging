@@ -13,7 +13,7 @@ from TripletLoss.triplet_loss import TripletLoss
 from TripletLoss.datasets import TripletDataset
 from Models.TripletModels import Embedder, EmbedderLarge
 from sklearn.decomposition import PCA
-from config2 import (
+from config import (
     ANNOTATED_PATCHES_DIR,
     PATIENT_DIAGNOSIS_FILE,
     ANNOTATED_METADATA_FILE,
@@ -276,7 +276,7 @@ embedder, lat_train, y_train, lat_test, y_test = run_training(
     use_pseudolabels=False  # REAL LABELS
 )
 
-latent_dir="data/latent_vectors"
+latent_dir="../data/latent_vectors"
 os.makedirs(latent_dir, exist_ok=True)
 
 # Save training latents and labels

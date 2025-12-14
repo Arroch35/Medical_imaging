@@ -15,18 +15,18 @@ from sklearn.metrics import (
 # --------------------------------------------------
 # CONFIG
 # --------------------------------------------------
-PAT_SPLIT_CSV = "data/patient_diagnosis/eval_patients.csv"
+PAT_SPLIT_CSV = "../data/patient_diagnosis/eval_patients.csv"
 
-SVM_METRICS_CSV = "data/svm/svm_kernel_metrics_no_cl.csv"
-PATIENT_CV_THRESHOLD_CSV = "data/patient_diagnosis/patient_cv_summary_pca_only_opt_th.csv"
+SVM_METRICS_CSV = "../data/svm/svm_kernel_metrics_no_cl.csv"
+PATIENT_CV_THRESHOLD_CSV = "../data/patient_diagnosis/patient_cv_summary_pca_only_opt_th.csv"
 
 AE_WEIGHTS = "checkpoints/manual_removed/AE_Config1.pth"
 PCA_PATH = "checkpoints/CL/pca_reducer.joblib"
 
-SVM_MODEL = "data/svm/best_svm_no_cl.pkl"
-SCALER_PATH = "data/svm/scaler_no_cl.pkl"
+SVM_MODEL = "../data/svm/best_svm_no_cl.pkl"
+SCALER_PATH = "../data/svm/scaler_no_cl.pkl"
 
-OUT_DIR = "data/patient_diagnosis/test_results"
+OUT_DIR = "../data/patient_diagnosis/test_results"
 IMG_BATCH = 64
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
