@@ -216,3 +216,4 @@ src/wandb_runs
 
 #models
 src/checkpoints
+.pt
