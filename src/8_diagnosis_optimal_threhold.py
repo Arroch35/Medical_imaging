@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 from sklearn.metrics import roc_curve, auc
 from sklearn.model_selection import KFold
-from config2 import *
+from configVAE import *
 
 
 PATIENT_COL = "CODI"

@@ -22,7 +22,7 @@ import tqdm
 from Models.AEmodels import VAECNN
 from Models.datasets import Standard_Dataset
 from utils import *
-from config2 import *
+from configVAE import *
 
 torch.backends.cudnn.benchmark = True
 

@@ -1,7 +1,7 @@
 import pandas as pd
 import os
 
-from config2 import *
+from configVAE import *
 
 def apply_thresholds_to_patient(
     patient_csv_path: str,

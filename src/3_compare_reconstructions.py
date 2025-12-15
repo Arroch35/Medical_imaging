@@ -9,7 +9,7 @@ from matplotlib.colors import rgb_to_hsv
 from sklearn.metrics import roc_curve, auc
 import pandas as pd
 
-from config2 import *
+from configVAE import *
 
 TOP_N = 20
 Config = "1"

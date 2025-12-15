@@ -2,7 +2,10 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import (
+    confusion_matrix,
+    roc_auc_score,
+)
 from pathlib import Path
 
 
@@ -82,37 +85,31 @@ def evaluate_thresholds_on_all_patients(
     score_col=SCORE_COL,
     label_col=LABEL_COL,
 ):
-    """
-    For each threshold (row) in thresholds_df:
-      - classify all patients using percent_positive and that threshold
-      - compare predictions with ground truth labels (densitat_num)
-      - compute TN, FP, FN, TP, accuracy, sensitivity, specificity
-
-    Returns:
-      - patient_level_predictions_all_thresholds.csv
-      - thresholds_patient_level_performance.csv
-    """
-    # new df to store all predictions
     preds_df = df_patient[[id_col, score_col, label_col]].copy()
+
+    y_true_raw = df_patient[label_col].values
+    y_true_bin = (y_true_raw == 1).astype(int)   # -1 -> 0, 1 -> 1
+    y_score = df_patient[score_col].values
+
+    try:
+        auc_overall = roc_auc_score(y_true_bin, y_score)
+    except ValueError:
+        auc_overall = np.nan
 
     metrics_rows = []
 
     for _, row in thresholds_df.iterrows():
-        fold = row["fold"].astype(int)
-        thr = row["best_threshold"]
+        fold = int(row["fold"])
+        thr = float(row["best_threshold"])
 
         col_name = f"pred_fold{fold}"
 
-        # 1
-        y_pred = classify_patients_for_threshold(
-            df_patient, thr, score_col=score_col
-        )
+        # Predictions
+        y_pred = classify_patients_for_threshold(df_patient, thr, score_col=score_col)
         preds_df[col_name] = y_pred
 
-        # 2
-        y_true = df_patient[label_col].values
-
-        cm = confusion_matrix(y_true, y_pred, labels=[-1, 1])
+        # Confusion matrix with labels [-1, 1]
+        cm = confusion_matrix(y_true_raw, y_pred, labels=[-1, 1])
 
         plot_and_save_confusion_matrix(
             fold=fold,
@@ -125,39 +122,109 @@ def evaluate_thresholds_on_all_patients(
         # true=-1   TN       FP
         # true=1    FN       TP
         tn, fp, fn, tp = cm.ravel()
-
         total = tn + fp + fn + tp
+
         accuracy = (tn + tp) / total if total > 0 else np.nan
-        sensitivity = tp / (tp + fn) if (tp + fn) > 0 else np.nan  # recall for class 1
-        specificity = tn / (tn + fp) if (tn + fp) > 0 else np.nan  # recall for class -1
-        balanced_acc = (sensitivity + specificity) / 2 \
-            if not np.isnan(sensitivity) and not np.isnan(specificity) else np.nan
+        precision = tp / (tp + fp) if (tp + fp) > 0 else np.nan
+        recall = tp / (tp + fn) if (tp + fn) > 0 else np.nan
+        f1 = (2 * precision * recall / (precision + recall)) if (
+            not np.isnan(precision) and not np.isnan(recall) and (precision + recall) > 0
+        ) else np.nan
+
+        sensitivity = recall
+        specificity = tn / (tn + fp) if (tn + fp) > 0 else np.nan
+        balanced_acc = (sensitivity + specificity) / 2 if (
+            not np.isnan(sensitivity) and not np.isnan(specificity)
+        ) else np.nan
 
         metrics_rows.append({
             "fold": fold,
             "threshold": thr,
-            "TN": tn,
-            "FP": fp,
-            "FN": fn,
-            "TP": tp,
+
+            "TN": tn, "FP": fp, "FN": fn, "TP": tp,
+
+            "auc": auc_overall,
             "accuracy": accuracy,
-            "sensitivity_pos_class1": sensitivity,
-            "specificity_neg_class-1": specificity,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+
+            "specificity": specificity,
             "balanced_accuracy": balanced_acc,
         })
 
-    # Save predictions for all thresholds
-    Path('patient_final_diagnosis').mkdir(exist_ok=True)
-    preds_df.to_csv(f"patient_final_diagnosis/patient_preds_on_thresholds_Config{Config}.csv", index=False)
-    print(f"Per-patient predictions for all thresholds saved to: /patient_final_diagnosis")
+    Path("patient_final_diagnosis").mkdir(exist_ok=True)
+    preds_path = f"patient_final_diagnosis/patient_preds_on_thresholds_Config{Config}.csv"
+    metrics_path = f"patient_final_diagnosis/thresholds_patient_level_performance_Config{Config}.csv"
 
-    # Save metrics per threshold
+    preds_df.to_csv(preds_path, index=False)
+    print(f"Per-patient predictions for all thresholds saved to: {preds_path}")
+
     metrics_df = pd.DataFrame(metrics_rows)
-    metrics_df.to_csv(f"patient_final_diagnosis/thresholds_patient_level_performance_Config{Config}.csv", index=False)
-    print(f"Metrics per threshold saved to: /patient_final_diagnosis")
+    metrics_df.to_csv(metrics_path, index=False)
+    print(f"Metrics per fold/threshold saved to: {metrics_path}")
 
-    return preds_df, metrics_df
+    # --- Overall (across folds): mean of metrics across fold-rows ---
+    overall = {
+        "Config": Config,
+        "mean_auc": metrics_df["auc"].mean(skipna=True),
+        "mean_accuracy": metrics_df["accuracy"].mean(skipna=True),
+        "mean_precision": metrics_df["precision"].mean(skipna=True),
+        "mean_recall": metrics_df["recall"].mean(skipna=True),
+        "mean_f1": metrics_df["f1"].mean(skipna=True),
+    }
+    overall_df = pd.DataFrame([overall])
+    overall_path = f"patient_final_diagnosis/overall_patient_level_performance_Config{Config}.csv"
+    overall_df.to_csv(overall_path, index=False)
+    print(f"Overall mean metrics saved to: {overall_path}")
 
+    return preds_df, metrics_df, overall_df
+
+
+
+def select_best_fold_threshold(metrics_df, weights=None):
+    """
+    Selects the best row (fold/threshold) using a weighted combination of metrics.
+    Default: equal weights for accuracy, precision, recall, f1.
+
+    Returns: (best_row_series, metrics_with_score_df)
+    """
+    if weights is None:
+        weights = {"accuracy": 1.0, "precision": 1.0, "recall": 1.0, "f1": 1.0}
+
+    df = metrics_df.copy()
+
+    # Ensure required columns exist
+    required = list(weights.keys())
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"metrics_df missing required columns: {missing}")
+
+    # Composite score (ignore NaNs by treating them as very low)
+    score = 0.0
+    wsum = 0.0
+    for col, w in weights.items():
+        score += w * df[col].fillna(-1e9)
+        wsum += w
+    df["composite_score"] = score / wsum
+
+    best_idx = df["composite_score"].idxmax()
+    best_row = df.loc[best_idx]
+    return best_row, df
+
+
+def print_best_selection(best_row):
+    fold = int(best_row["fold"])
+    thr = float(best_row["threshold"])
+    print("\n=== BEST FOLD / THRESHOLD (multi-metric) ===")
+    print(f"Fold: {fold}")
+    print(f"Threshold: {thr:.6f}")
+    print(f"AUC: {best_row['auc']:.6f}" if pd.notna(best_row["auc"]) else "AUC: NaN")
+    print(f"Accuracy: {best_row['accuracy']:.6f}")
+    print(f"Precision: {best_row['precision']:.6f}")
+    print(f"Recall: {best_row['recall']:.6f}")
+    print(f"F1: {best_row['f1']:.6f}")
+    print(f"Composite score: {best_row['composite_score']:.6f}")
 
 if __name__ == "__main__":
     # patients df
@@ -167,8 +234,11 @@ if __name__ == "__main__":
     thresholds_df = load_thresholds_df()
 
     # apply thresholds and evaluate
-    preds_df, metrics_df = evaluate_thresholds_on_all_patients(
+    preds_df, metrics_df, summary_df = evaluate_thresholds_on_all_patients(
         df_patient,
         thresholds_df,
     )
 
+    # best fold/threshold selection
+    best_row, metrics_scored_df = select_best_fold_threshold(metrics_df)
+    print_best_selection(best_row)
