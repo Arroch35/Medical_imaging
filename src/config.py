@@ -1,6 +1,6 @@
 from pathlib import Path
 
-YOUR_PATH_TO_THE_PROJECT = r"C:\Users\arroc\OneDrive\Escritorio\Apuntes\UAB\4th_year\VAL\github_projects"
+YOUR_PATH_TO_THE_PROJECT = r"YOUR_PATH_TO_THE_PROJECT"
 
 ROOT_DIR = Path(YOUR_PATH_TO_THE_PROJECT) / "Medical_imaging"
 DATA_DIR = ROOT_DIR / "data"

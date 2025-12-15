@@ -190,6 +190,42 @@ def LoadCropped(list_folders, n_images_per_folder=None, excelFile=None, resize=N
         print(f"[LoadCropped] Loaded {len(images)} images from {len(metadata['PatID'].unique())} healthy patients.")
     return Ims, metadata
 
+def LoadCropped_byPatient(list_folders, n_folders, resize=None, verbose=False):
+    if not isinstance(list_folders, (list, tuple)):
+        raise ValueError("[LoadCroppedByFolders] 'list_folders' must be a list of folder paths.")
+
+    if n_folders <= 0:
+        raise ValueError("[LoadCroppedByFolders] 'n_folders' must be a positive integer.")
+
+    # Clip n_folders to the available number of folders
+    n_folders = min(n_folders, len(list_folders))
+    selected_folders = list_folders[:n_folders]
+
+    if verbose:
+        print(f"[LoadCroppedByFolders] Using {n_folders} folder(s) out of {len(list_folders)} provided.")
+
+    per_folder_data = []
+
+    for idx, folder in enumerate(selected_folders):
+        if verbose:
+            print(f"[LoadCroppedByFolders] ({idx+1}/{n_folders}) Loading folder: {folder}")
+
+        # Reuse existing LoadCropped logic for a single folder
+        Ims, metadata = LoadCropped(
+            list_folders=[folder],
+            n_images_per_folder=None,  # load all images in this folder
+            excelFile=None,            # no diagnosis filtering here
+            resize=resize,
+            verbose=verbose
+        )
+
+        per_folder_data.append((Ims, metadata))
+
+        if verbose:
+            print(f"[LoadCroppedByFolders]   -> Loaded {len(metadata)} images for PatID(s): "
+                  f"{metadata['PatID'].unique().tolist() if not metadata.empty else '[]'}")
+
+    return per_folder_data
 
 def GetImagePaths(list_folders, n_images_per_folder=None, excelFile=None, verbose=False):
     """
